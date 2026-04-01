@@ -80,3 +80,8 @@ markers = [
     "webui: tests requiring WebUI dataset (deselect with '-m not webui')",
     "benchmark: performance benchmark tests",
 ]
+
+[dependency-groups]
+dev = [
+    "types-pyyaml>=6.0.12.20250915",
+]
