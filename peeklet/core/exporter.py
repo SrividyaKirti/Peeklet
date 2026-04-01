@@ -3,40 +3,64 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from PIL import Image
 
-from peeklet.utils.types import FrameResult
+if TYPE_CHECKING:
+    import numpy as np
 
+    from peeklet.utils.types import FrameResult
 
-MANIFEST_SCHEMA = pa.schema([
-    pa.field("frame_id", pa.string()),
-    pa.field("timestamp", pa.timestamp("us", tz="UTC"), nullable=True),
-    pa.field("event_type", pa.string()),
-    pa.field("app_name", pa.string(), nullable=True),
-    pa.field("window_title", pa.string(), nullable=True),
-    pa.field("is_keyframe", pa.bool_()),
-    pa.field("perceptual_hash", pa.string()),
-    pa.field("ssim_score", pa.float64(), nullable=True),
-    pa.field("change_score", pa.float64(), nullable=True),
-    pa.field("changed_pct", pa.float64(), nullable=True),
-    pa.field("changed_regions", pa.list_(pa.struct([
-        pa.field("x", pa.int32()), pa.field("y", pa.int32()),
-        pa.field("w", pa.int32()), pa.field("h", pa.int32()),
-    ])), nullable=True),
-    pa.field("adaptive_mask", pa.list_(pa.struct([
-        pa.field("x", pa.int32()), pa.field("y", pa.int32()),
-        pa.field("w", pa.int32()), pa.field("h", pa.int32()),
-    ])), nullable=True),
-    pa.field("frame_width", pa.int32()),
-    pa.field("frame_height", pa.int32()),
-    pa.field("source_format", pa.string(), nullable=True),
-    pa.field("asset_path", pa.string(), nullable=True),
-    pa.field("pii_detected", pa.bool_(), nullable=True),
-])
+MANIFEST_SCHEMA = pa.schema(
+    [
+        pa.field("frame_id", pa.string()),
+        pa.field("timestamp", pa.timestamp("us", tz="UTC"), nullable=True),
+        pa.field("event_type", pa.string()),
+        pa.field("app_name", pa.string(), nullable=True),
+        pa.field("window_title", pa.string(), nullable=True),
+        pa.field("is_keyframe", pa.bool_()),
+        pa.field("perceptual_hash", pa.string()),
+        pa.field("ssim_score", pa.float64(), nullable=True),
+        pa.field("change_score", pa.float64(), nullable=True),
+        pa.field("changed_pct", pa.float64(), nullable=True),
+        pa.field(
+            "changed_regions",
+            pa.list_(
+                pa.struct(
+                    [
+                        pa.field("x", pa.int32()),
+                        pa.field("y", pa.int32()),
+                        pa.field("w", pa.int32()),
+                        pa.field("h", pa.int32()),
+                    ]
+                )
+            ),
+            nullable=True,
+        ),
+        pa.field(
+            "adaptive_mask",
+            pa.list_(
+                pa.struct(
+                    [
+                        pa.field("x", pa.int32()),
+                        pa.field("y", pa.int32()),
+                        pa.field("w", pa.int32()),
+                        pa.field("h", pa.int32()),
+                    ]
+                )
+            ),
+            nullable=True,
+        ),
+        pa.field("frame_width", pa.int32()),
+        pa.field("frame_height", pa.int32()),
+        pa.field("source_format", pa.string(), nullable=True),
+        pa.field("asset_path", pa.string(), nullable=True),
+        pa.field("pii_detected", pa.bool_(), nullable=True),
+    ]
+)
 
 
 def save_keyframe(frame: np.ndarray, output_dir: Path, frame_id: str, fmt: str = "png") -> Path:
@@ -60,25 +84,27 @@ class ManifestWriter:
         mask = None
         if result.adaptive_mask is not None:
             mask = [r.to_dict() for r in result.adaptive_mask]
-        self._rows.append({
-            "frame_id": result.frame_id,
-            "timestamp": result.timestamp,
-            "event_type": result.event_type.value,
-            "app_name": result.app_name,
-            "window_title": result.window_title,
-            "is_keyframe": result.is_keyframe,
-            "perceptual_hash": result.perceptual_hash,
-            "ssim_score": result.ssim_score,
-            "change_score": result.change_score,
-            "changed_pct": result.changed_pct,
-            "changed_regions": regions,
-            "adaptive_mask": mask,
-            "frame_width": result.frame_width,
-            "frame_height": result.frame_height,
-            "source_format": result.source_format,
-            "asset_path": result.asset_path,
-            "pii_detected": result.pii_detected,
-        })
+        self._rows.append(
+            {
+                "frame_id": result.frame_id,
+                "timestamp": result.timestamp,
+                "event_type": result.event_type.value,
+                "app_name": result.app_name,
+                "window_title": result.window_title,
+                "is_keyframe": result.is_keyframe,
+                "perceptual_hash": result.perceptual_hash,
+                "ssim_score": result.ssim_score,
+                "change_score": result.change_score,
+                "changed_pct": result.changed_pct,
+                "changed_regions": regions,
+                "adaptive_mask": mask,
+                "frame_width": result.frame_width,
+                "frame_height": result.frame_height,
+                "source_format": result.source_format,
+                "asset_path": result.asset_path,
+                "pii_detected": result.pii_detected,
+            }
+        )
 
     def flush(self) -> None:
         if not self._rows:

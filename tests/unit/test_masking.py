@@ -3,7 +3,6 @@
 import numpy as np
 
 from peeklet.core.masking import AdaptiveMask
-from peeklet.utils.types import Region
 
 
 class TestAdaptiveMask:

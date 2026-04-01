@@ -1,7 +1,6 @@
 """Tests for PII redaction."""
 
 import numpy as np
-import pytest
 
 from peeklet.config import PiiPattern
 from peeklet.core.redactor import (
@@ -9,7 +8,6 @@ from peeklet.core.redactor import (
     build_pattern_set,
     find_pii_in_text,
     redact_regions,
-    PiiMatch,
 )
 from peeklet.utils.types import Region
 

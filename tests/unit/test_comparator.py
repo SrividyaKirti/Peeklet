@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from peeklet.core.comparator import compare_frames, ComparisonResult
+from peeklet.core.comparator import ComparisonResult, compare_frames
 
 
 class TestCompareFrames:

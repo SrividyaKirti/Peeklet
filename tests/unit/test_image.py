@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from peeklet.utils.image import ensure_rgb_uint8, crop_region, compute_block_grid
+from peeklet.utils.image import compute_block_grid, crop_region, ensure_rgb_uint8
 from peeklet.utils.types import Region
 
 

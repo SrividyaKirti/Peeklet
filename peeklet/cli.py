@@ -7,15 +7,33 @@ from pathlib import Path
 import click
 
 import peeklet
-from peeklet.config import PeekletConfig, load_config
+from peeklet.config import load_config
 from peeklet.core.loader import load_frame
 from peeklet.pipeline import Pipeline
 
 
 @click.command()
-@click.option("--input", "input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True, help="Directory containing screenshot images.")
-@click.option("--output", "output_dir", type=click.Path(path_type=Path), default="./output", help="Directory for keyframes and manifest.")
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), default=None, help="Path to config file (JSON or YAML).")
+@click.option(
+    "--input",
+    "input_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="Directory containing screenshot images.",
+)
+@click.option(
+    "--output",
+    "output_dir",
+    type=click.Path(path_type=Path),
+    default="./output",
+    help="Directory for keyframes and manifest.",
+)
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to config file (JSON or YAML).",
+)
 @click.option("--no-redact", is_flag=True, default=False, help="Disable PII redaction.")
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(input_dir: Path, output_dir: Path, config_path: Path | None, no_redact: bool) -> None:
@@ -32,10 +50,7 @@ def main(input_dir: Path, output_dir: Path, config_path: Path | None, no_redact:
     pipeline = Pipeline(config)
 
     extensions = {f".{fmt}" for fmt in config.input.supported_formats}
-    files = sorted(
-        f for f in input_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in extensions
-    )
+    files = sorted(f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in extensions)
 
     if not files:
         click.echo(f"No supported images found in {input_dir}")

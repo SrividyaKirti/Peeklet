@@ -27,7 +27,9 @@ def compare_frames(
 ) -> ComparisonResult:
     gray_current = _to_grayscale(current)
     gray_reference = _to_grayscale(reference)
-    ssim_score = float(structural_similarity(gray_reference, gray_current, data_range=255))
+    ssim_score = float(
+        structural_similarity(gray_reference, gray_current, data_range=255)  # type: ignore[no-untyped-call]
+    )
     change_score = 1.0 - ssim_score
     changed_regions = _compute_block_diff(current, reference, block_size, block_change_threshold)
     h, w = current.shape[:2]
@@ -62,8 +64,6 @@ def _compute_block_diff(
 
 
 def _to_grayscale(frame: np.ndarray) -> np.ndarray:
-    return (
-        0.2989 * frame[:, :, 0]
-        + 0.5870 * frame[:, :, 1]
-        + 0.1140 * frame[:, :, 2]
-    ).astype(np.uint8)
+    return (0.2989 * frame[:, :, 0] + 0.5870 * frame[:, :, 1] + 0.1140 * frame[:, :, 2]).astype(
+        np.uint8
+    )

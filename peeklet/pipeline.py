@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import numpy as np
 
 from peeklet.config import PeekletConfig, load_patterns
 from peeklet.core.comparator import compare_frames
@@ -14,7 +11,12 @@ from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.core.hasher import compute_phash, hashes_match
 from peeklet.core.masking import AdaptiveMask
 from peeklet.core.redactor import build_pattern_set
-from peeklet.utils.types import EventType, FrameResult, Region
+from peeklet.utils.types import EventType, FrameResult
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    import numpy as np
 
 
 class Pipeline:

@@ -13,7 +13,9 @@ from peeklet.utils.types import Region
 class AdaptiveMask:
     """Detects and masks screen regions that change on nearly every frame."""
 
-    def __init__(self, block_size: int = 32, window_size: int = 15, noise_threshold: float = 0.8) -> None:
+    def __init__(
+        self, block_size: int = 32, window_size: int = 15, noise_threshold: float = 0.8
+    ) -> None:
         self.block_size = block_size
         self.window_size = window_size
         self.noise_threshold = noise_threshold

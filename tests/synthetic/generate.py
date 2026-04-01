@@ -51,10 +51,28 @@ def generate_form_fill_sequence(output_dir: Path) -> dict:
     Expected: frames 0, 3, 6, 9, 12 are keyframes.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    text_states = ["", "", "", "Joh", "Joh", "Joh", "John D", "John D", "John D",
-                   "John Doe", "John Doe", "John Doe", "John Doe, 42", "John Doe, 42", "John Doe, 42"]
+    text_states = [
+        "",
+        "",
+        "",
+        "Joh",
+        "Joh",
+        "Joh",
+        "John D",
+        "John D",
+        "John D",
+        "John Doe",
+        "John Doe",
+        "John Doe",
+        "John Doe, 42",
+        "John Doe, 42",
+        "John Doe, 42",
+    ]
     keyframes = [0, 3, 6, 9, 12]
-    ground_truth = {"keyframes": keyframes, "description": "Form fill — text appears every 3 frames"}
+    ground_truth = {
+        "keyframes": keyframes,
+        "description": "Form fill — text appears every 3 frames",
+    }
     for i, text in enumerate(text_states):
         frame = _make_desktop_base(bg_color=(245, 245, 245))
         _draw_text(frame, "Name:", x=50, y=100, color=(0, 0, 0))
@@ -76,8 +94,13 @@ def generate_pip_video_sequence(output_dir: Path, num_frames: int = 20) -> dict:
     for i in range(num_frames):
         frame = _make_desktop_base(bg_color=(250, 250, 250))
         for line in range(5):
-            _draw_text(frame, "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-                      x=30, y=60 + line * 30, color=(30, 30, 30))
+            _draw_text(
+                frame,
+                "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+                x=30,
+                y=60 + line * 30,
+                color=(30, 30, 30),
+            )
         video_region = rng.integers(0, 256, (150, 200, 3), dtype=np.uint8)
         frame[450:600, 740:940] = video_region
         Image.fromarray(frame).save(output_dir / f"frame_{i:03d}.png")
@@ -101,8 +124,7 @@ def _make_desktop_base(
     return frame
 
 
-def _draw_text(frame: np.ndarray, text: str, x: int, y: int,
-               color: tuple[int, int, int]) -> None:
+def _draw_text(frame: np.ndarray, text: str, x: int, y: int, color: tuple[int, int, int]) -> None:
     img = Image.fromarray(frame)
     draw = ImageDraw.Draw(img)
     draw.text((x, y), text, fill=color)
@@ -115,6 +137,7 @@ def _save_ground_truth(output_dir: Path, ground_truth: dict) -> None:
 
 if __name__ == "__main__":
     import sys
+
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("tests/synthetic/output")
     generate_all(out)
     print(f"Generated synthetic sequences in {out}")

@@ -4,19 +4,42 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-
-import numpy as np
+from typing import TYPE_CHECKING
 
 from peeklet.config import PiiPattern
-from peeklet.utils.types import Region
+
+if TYPE_CHECKING:
+    import numpy as np
+
+    from peeklet.utils.types import Region
 
 BUILTIN_PATTERNS: list[PiiPattern] = [
-    PiiPattern(name="email", regex=r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", description="Email addresses"),
-    PiiPattern(name="phone", regex=r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b", description="US phone numbers"),
-    PiiPattern(name="ssn", regex=r"\b\d{3}-\d{2}-\d{4}\b", description="US Social Security Numbers"),
-    PiiPattern(name="credit_card", regex=r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b", description="Credit card numbers"),
-    PiiPattern(name="ip_address", regex=r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", description="IPv4 addresses"),
-    PiiPattern(name="address", regex=r"\b\d{1,5}\s+\w+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln)\b", description="US street addresses"),
+    PiiPattern(
+        name="email",
+        regex=r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+        description="Email addresses",
+    ),
+    PiiPattern(
+        name="phone", regex=r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b", description="US phone numbers"
+    ),
+    PiiPattern(
+        name="ssn", regex=r"\b\d{3}-\d{2}-\d{4}\b", description="US Social Security Numbers"
+    ),
+    PiiPattern(
+        name="credit_card",
+        regex=r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",
+        description="Credit card numbers",
+    ),
+    PiiPattern(
+        name="ip_address",
+        regex=r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+        description="IPv4 addresses",
+    ),
+    PiiPattern(
+        name="address",
+        regex=r"\b\d{1,5}\s+\w+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln)\b",
+        description="US street addresses",
+    ),
 ]
 
 
@@ -44,7 +67,14 @@ def find_pii_in_text(text: str, patterns: list[PiiPattern]) -> list[PiiMatch]:
         if not pattern.regex:
             continue
         for match in re.finditer(pattern.regex, text):
-            matches.append(PiiMatch(pattern_name=pattern.name, matched_text=match.group(), start=match.start(), end=match.end()))
+            matches.append(
+                PiiMatch(
+                    pattern_name=pattern.name,
+                    matched_text=match.group(),
+                    start=match.start(),
+                    end=match.end(),
+                )
+            )
     return matches
 
 

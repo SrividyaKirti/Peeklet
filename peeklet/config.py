@@ -52,7 +52,12 @@ class RedactorConfig(BaseModel):
     enabled: bool = True
     pii_types: list[str] = Field(
         default_factory=lambda: [
-            "email", "phone", "ssn", "credit_card", "ip_address", "address",
+            "email",
+            "phone",
+            "ssn",
+            "credit_card",
+            "ip_address",
+            "address",
         ]
     )
     custom_patterns_file: str | None = None

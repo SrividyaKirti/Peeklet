@@ -53,9 +53,7 @@ class TestPipelineBatch:
         assert result_b.ssim_score is not None
         assert result_b.ssim_score < 0.85
 
-    def test_pipeline_writes_manifest(
-        self, basic_config: PeekletConfig, tmp_output: Path
-    ) -> None:
+    def test_pipeline_writes_manifest(self, basic_config: PeekletConfig, tmp_output: Path) -> None:
         pipeline = Pipeline(basic_config)
 
         frame_a = np.full((100, 100, 3), 50, dtype=np.uint8)
@@ -72,9 +70,7 @@ class TestPipelineBatch:
         table = pq.read_table(manifest)
         assert table.num_rows == 3
 
-    def test_keyframe_images_saved(
-        self, basic_config: PeekletConfig, tmp_output: Path
-    ) -> None:
+    def test_keyframe_images_saved(self, basic_config: PeekletConfig, tmp_output: Path) -> None:
         pipeline = Pipeline(basic_config)
 
         frame_a = np.full((100, 100, 3), 50, dtype=np.uint8)
@@ -99,13 +95,14 @@ class TestPipelineBatch:
         assert result.is_keyframe is False
         assert result.ssim_score is None
 
-    def test_frame_metadata_in_result(
-        self, basic_config: PeekletConfig, tmp_output: Path
-    ) -> None:
+    def test_frame_metadata_in_result(self, basic_config: PeekletConfig, tmp_output: Path) -> None:
         pipeline = Pipeline(basic_config)
         frame = np.full((100, 100, 3), 128, dtype=np.uint8)
         result = pipeline.process_frame(
-            frame, frame_id="frame_000", app_name="Chrome", window_title="Google",
+            frame,
+            frame_id="frame_000",
+            app_name="Chrome",
+            window_title="Google",
         )
         assert result.app_name == "Chrome"
         assert result.window_title == "Google"
