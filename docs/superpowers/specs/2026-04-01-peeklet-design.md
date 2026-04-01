@@ -398,34 +398,67 @@ uv sync
 | `bench_comparator.py` | <5ms per SSIM on 1080p |
 | `bench_pipeline.py` | >100 frames/sec on 1080p batch |
 
-### Test Dataset
+### Test Dataset — Four Tiers
+
+| Tier | Dataset | What it tests | Size | In repo? |
+|------|---------|---------------|------|----------|
+| 1. Fixtures | Hand-crafted tiny images | Unit tests — fast, deterministic | ~1 MB | Yes (committed) |
+| 2. Synthetic | Generated fake UIs | CI pipeline — reproducible, known ground truth | ~50 MB | Generated on demand |
+| 3. Mind2Web | 2,350 real task sequences (17k screenshots) | Keyframe detection accuracy, sequential change detection | Large | Downloaded on demand |
+| 4. ShowUI | 7.5k desktop screenshots with bounding boxes | Block-level change region accuracy, UI element grounding | 328 MB | Downloaded on demand |
+
+**WebUI (400k pages)** is available as an optional tier for stress-testing DuckDB/Parquet export at scale and benchmarking perceptual hash dedup against screen similarity labels.
+
+**Directory structure:**
 
 ```
-tests/data/
-├── formats/              # one sample per supported format
-│   ├── sample.png
-│   ├── sample.jpg
-│   ├── sample.pdf
-│   ├── sample.bmp
-│   ├── sample.webp
-│   └── corrupt.png       # truncated file
-├── sequences/
-│   ├── idle/             # 20 frames, cursor blink + clock
-│   ├── app_switch/       # 10 frames, Excel → Chrome
-│   ├── form_fill/        # 15 frames, typing in a form
-│   ├── pip_video/        # 20 frames, article + YouTube PiP
-│   └── mixed/            # 50 frames, realistic workflow
-├── pii/
-│   ├── email_visible.png
-│   ├── phone_visible.png
-│   ├── ssn_visible.png
-│   └── clean.png
-└── masks/
-    ├── clock_only.png
-    └── full_change.png
+tests/
+├── fixtures/                 # Tier 1 — committed, tiny, fast unit tests
+│   ├── formats/              # One sample per supported format
+│   │   ├── sample.png
+│   │   ├── sample.jpg
+│   │   ├── sample.pdf
+│   │   ├── sample.bmp
+│   │   ├── sample.webp
+│   │   └── corrupt.png       # Truncated file for error handling
+│   └── pii/
+│       ├── email_visible.png
+│       ├── phone_visible.png
+│       ├── ssn_visible.png
+│       └── clean.png
+├── synthetic/                # Tier 2 — generated, not committed
+│   └── generate.py           # Renders fake UIs with known mutations
+│                             # Sequences: idle, app_switch, form_fill,
+│                             # pip_video, mixed (50 frames realistic)
+├── datasets/                 # Tiers 3-4 — downloaded on demand, gitignored
+│   ├── __init__.py
+│   ├── download.py           # Unified downloader for all external datasets
+│   ├── mind2web.py           # Fetch + prepare Mind2Web subset from HuggingFace
+│   ├── showui.py             # Fetch + prepare ShowUI (328 MB)
+│   ├── webui.py              # Fetch + prepare WebUI subset (optional, large)
+│   └── README.md             # Setup instructions for contributors
+├── unit/                     # One test file per module
+├── integration/              # Full pipeline tests
+├── benchmarks/               # Performance regression tests
+└── conftest.py               # pytest markers: @pytest.mark.mind2web,
+                              # @pytest.mark.showui, @pytest.mark.webui
 ```
 
-Each sequence includes expected output (which frames are keyframes, what regions changed) for assertion.
+**CI runs tiers 1-2 only** (fast, no downloads). Tiers 3-4 run locally or in a nightly CI job:
+
+```bash
+pytest -m mind2web    # Run Mind2Web validation tests
+pytest -m showui      # Run ShowUI validation tests
+pytest -m webui       # Run WebUI scale tests (optional)
+```
+
+**What each external dataset validates:**
+
+- **Mind2Web:** Sequential task steps = known keyframes. Measures whether Peeklet correctly identifies which frames are keyframes vs noise. Tests the full pipeline cascade.
+- **ShowUI:** Bounding box annotations on interactive elements. Synthetically mutate those regions and verify block-level diff finds them. Tests comparator and masking accuracy.
+- **WebUI:** Screen similarity labels for dedup benchmarking at scale. Tests Parquet export performance with DuckDB on large volumes.
+
+Each tier includes expected output (which frames are keyframes, what regions changed) for assertion. Synthetic sequences encode ground truth in the generation script. External datasets use annotation-derived ground truth.
 
 ## CI/CD
 
