@@ -1,0 +1,125 @@
+"""Tests for configuration loading and validation."""
+
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from peeklet.config import (
+    ComparatorConfig,
+    MaskingConfig,
+    PeekletConfig,
+    PipelineConfig,
+    load_config,
+    load_patterns,
+)
+
+
+class TestDefaults:
+    def test_default_config_is_valid(self) -> None:
+        config = PeekletConfig()
+        assert config.pipeline.mode == "batch"
+        assert config.masking.block_size == 32
+        assert config.masking.window_size == 15
+        assert config.masking.noise_threshold == 0.8
+        assert config.hasher.algorithm == "phash"
+        assert config.comparator.ssim_threshold == 0.85
+        assert config.redactor.enabled is True
+        assert config.exporter.keyframe_format == "png"
+        assert config.exporter.parquet_compression == "snappy"
+
+    def test_pipeline_defaults(self) -> None:
+        config = PipelineConfig()
+        assert config.mode == "batch"
+        assert config.concurrency == 4
+
+
+class TestValidation:
+    def test_reject_invalid_mode(self) -> None:
+        with pytest.raises(ValueError):
+            PipelineConfig(mode="invalid")
+
+    def test_reject_negative_block_size(self) -> None:
+        with pytest.raises(ValueError):
+            MaskingConfig(block_size=-1)
+
+    def test_reject_threshold_out_of_range(self) -> None:
+        with pytest.raises(ValueError):
+            ComparatorConfig(ssim_threshold=1.5)
+
+    def test_reject_threshold_below_zero(self) -> None:
+        with pytest.raises(ValueError):
+            ComparatorConfig(ssim_threshold=-0.1)
+
+    def test_reject_noise_threshold_out_of_range(self) -> None:
+        with pytest.raises(ValueError):
+            MaskingConfig(noise_threshold=1.5)
+
+
+class TestLoadConfig:
+    def test_load_from_json_file(self, tmp_path: Path) -> None:
+        config_data = {
+            "comparator": {"ssim_threshold": 0.9},
+            "masking": {"block_size": 64},
+        }
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps(config_data))
+
+        config = load_config(config_file)
+        assert config.comparator.ssim_threshold == 0.9
+        assert config.masking.block_size == 64
+        assert config.masking.window_size == 15
+
+    def test_load_from_yaml_file(self, tmp_path: Path) -> None:
+        config_data = {"comparator": {"ssim_threshold": 0.7}}
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump(config_data))
+
+        config = load_config(config_file)
+        assert config.comparator.ssim_threshold == 0.7
+
+    def test_load_nonexistent_file_raises(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_config(Path("/nonexistent/config.json"))
+
+    def test_load_none_returns_defaults(self) -> None:
+        config = load_config(None)
+        assert config == PeekletConfig()
+
+
+class TestPatternLoading:
+    def test_load_custom_patterns(self, tmp_path: Path) -> None:
+        patterns_data = {
+            "patterns": [
+                {
+                    "name": "employee_id",
+                    "regex": r"EMP-\d{6}",
+                    "description": "Employee ID",
+                },
+            ]
+        }
+        patterns_file = tmp_path / "patterns.yaml"
+        patterns_file.write_text(yaml.dump(patterns_data))
+
+        patterns = load_patterns(patterns_file)
+        assert len(patterns) == 1
+        assert patterns[0].name == "employee_id"
+        assert patterns[0].regex == r"EMP-\d{6}"
+        assert patterns[0].enabled is True
+
+    def test_disabled_pattern(self, tmp_path: Path) -> None:
+        patterns_data = {
+            "patterns": [
+                {"name": "ssn", "enabled": False},
+            ]
+        }
+        patterns_file = tmp_path / "patterns.yaml"
+        patterns_file.write_text(yaml.dump(patterns_data))
+
+        patterns = load_patterns(patterns_file)
+        assert patterns[0].enabled is False
+
+    def test_load_missing_patterns_file_raises(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_patterns(Path("/nonexistent/patterns.yaml"))
