@@ -132,6 +132,10 @@ class ManifestWriter:
             }
         )
 
+    def clear(self) -> None:
+        """Discard all buffered rows without writing."""
+        self._rows.clear()
+
     def flush(self) -> None:
         if not self._rows:
             return

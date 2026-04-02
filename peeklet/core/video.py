@@ -188,7 +188,17 @@ def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
 
         if result.is_keyframe:
             keyframe_count += 1
-            result.frame_id = f"step_{keyframe_count:03d}"
+            new_frame_id = f"step_{keyframe_count:03d}"
+            # Rename the saved keyframe image to use the step_NNN name
+            if result.asset_path:
+                old_path = Path(result.asset_path)
+                new_path = old_path.with_name(
+                    new_frame_id + old_path.suffix
+                )
+                if old_path.exists():
+                    old_path.rename(new_path)
+                result.asset_path = str(new_path)
+            result.frame_id = new_frame_id
             result.keyframe_index = keyframe_count
             result.change_magnitude = _change_magnitude(result)
             if prev_keyframe_ts is not None:
@@ -230,6 +240,13 @@ def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
         elif config.video.audio_detection:
             # Audio extraction failed; default to silence so the field is populated
             r.audio_activity = "silence"
+
+    # Re-write manifest with fully enriched results (video metadata was set
+    # after process_frame() already called writer.append(), so we must
+    # clear and re-append the enriched rows before flushing).
+    final_pipeline._writer.clear()
+    for r in results:
+        final_pipeline._writer.append(r)
 
     final_pipeline.finalize()
     return results
