@@ -68,3 +68,113 @@ class TestCli:
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
         assert "0.1.0" in result.output
+
+
+class TestVideoCliDetection:
+    def test_video_file_input(self, tmp_path: Path) -> None:
+        """CLI accepts a video file as --input."""
+        import imageio.v3 as iio
+
+        video_path = tmp_path / "demo.mp4"
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+        with iio.imopen(video_path, "w", plugin="pyav") as out:
+            out.init_video_stream("libx264", fps=10)
+            for f in frames:
+                out.write_frame(f)
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "--input", str(video_path),
+            "--output", str(tmp_path / "output"),
+            "--no-redact",
+        ])
+        assert result.exit_code == 0
+        assert "keyframe" in result.output.lower()
+
+    def test_directory_with_only_videos(self, tmp_path: Path) -> None:
+        """CLI processes directory of video files."""
+        import imageio.v3 as iio
+
+        for name in ["a.mp4", "b.mp4"]:
+            video_path = tmp_path / name
+            frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+            with iio.imopen(video_path, "w", plugin="pyav") as out:
+                out.init_video_stream("libx264", fps=10)
+                for f in frames:
+                    out.write_frame(f)
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "--input", str(tmp_path),
+            "--output", str(tmp_path / "output"),
+            "--no-redact",
+        ])
+        assert result.exit_code == 0
+
+    def test_mixed_directory_without_mode_errors(self, tmp_path: Path) -> None:
+        """CLI errors on mixed directory without --mode."""
+        import imageio.v3 as iio
+
+        video_path = tmp_path / "demo.mp4"
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+        with iio.imopen(video_path, "w", plugin="pyav") as out:
+            out.init_video_stream("libx264", fps=10)
+            for f in frames:
+                out.write_frame(f)
+
+        img = Image.new("RGB", (80, 60))
+        img.save(tmp_path / "shot.png")
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "--input", str(tmp_path),
+            "--output", str(tmp_path / "output"),
+        ])
+        assert result.exit_code != 0
+        assert "--mode" in result.output
+
+    def test_mixed_directory_with_mode_video(self, tmp_path: Path) -> None:
+        """CLI processes only videos when --mode video is specified."""
+        import imageio.v3 as iio
+
+        video_path = tmp_path / "demo.mp4"
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+        with iio.imopen(video_path, "w", plugin="pyav") as out:
+            out.init_video_stream("libx264", fps=10)
+            for f in frames:
+                out.write_frame(f)
+
+        img = Image.new("RGB", (80, 60))
+        img.save(tmp_path / "shot.png")
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "--input", str(tmp_path),
+            "--output", str(tmp_path / "output"),
+            "--mode", "video",
+            "--no-redact",
+        ])
+        assert result.exit_code == 0
+
+    def test_transcript_flag(self, tmp_path: Path) -> None:
+        """CLI accepts --transcript flag."""
+        import imageio.v3 as iio
+
+        video_path = tmp_path / "demo.mp4"
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+        with iio.imopen(video_path, "w", plugin="pyav") as out:
+            out.init_video_stream("libx264", fps=10)
+            for f in frames:
+                out.write_frame(f)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n")
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "--input", str(video_path),
+            "--output", str(tmp_path / "output"),
+            "--no-redact",
+            "--transcript", str(srt_path),
+        ])
+        assert result.exit_code == 0

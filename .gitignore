@@ -35,6 +35,7 @@ results/
 
 # Superpowers
 .superpowers/
+.worktrees/
 
 # Environment
 .env

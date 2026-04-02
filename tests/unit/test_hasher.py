@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from peeklet.core.hasher import compute_phash, hashes_match, compute_phash_tiled, tiled_hashes_match
+from peeklet.core.hasher import compute_phash, compute_phash_tiled, hashes_match, tiled_hashes_match
 
 
 class TestComputePhash:

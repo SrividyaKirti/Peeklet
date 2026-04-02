@@ -69,3 +69,14 @@ class FrameResult:
     visual_reason: str | None = None
     prev_keyframe_id: str | None = None
     prev_keyframe_path: str | None = None
+    # Video-specific fields (all None for image-sourced frames)
+    source_video: str | None = None
+    video_timestamp: float | None = None
+    video_frame_number: int | None = None
+    time_since_prev_keyframe: float | None = None
+    audio_activity: str | None = None
+    transcript_segment: str | None = None
+    keyframe_index: int | None = None
+    total_keyframes: int | None = None
+    video_duration: float | None = None
+    change_magnitude: str | None = None

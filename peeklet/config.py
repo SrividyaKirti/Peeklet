@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -52,7 +52,7 @@ class RedactorConfig(BaseModel):
     """PII redaction settings."""
 
     enabled: bool = True
-    pii_types: List[str] = Field(
+    pii_types: list[str] = Field(
         default_factory=lambda: [
             "email",
             "phone",
@@ -62,7 +62,7 @@ class RedactorConfig(BaseModel):
             "address",
         ]
     )
-    custom_patterns_file: Optional[str] = None
+    custom_patterns_file: str | None = None
 
 
 class ExporterConfig(BaseModel):
@@ -76,10 +76,19 @@ class ExporterConfig(BaseModel):
 class InputConfig(BaseModel):
     """Input settings."""
 
-    supported_formats: List[str] = Field(
+    supported_formats: list[str] = Field(
         default_factory=lambda: ["png", "jpg", "jpeg", "bmp", "tiff", "webp", "pdf"]
     )
     sort_by: Literal["filename", "timestamp"] = "filename"
+
+
+class VideoConfig(BaseModel):
+    """Video input settings."""
+
+    sample_fps: float = Field(default=1.0, gt=0.0)
+    formats: list[str] = Field(default_factory=lambda: ["mp4", "mov", "webm"])
+    audio_detection: bool = True
+    transcript_path: str | None = None
 
 
 class PeekletConfig(BaseModel):
@@ -92,6 +101,7 @@ class PeekletConfig(BaseModel):
     redactor: RedactorConfig = Field(default_factory=RedactorConfig)
     exporter: ExporterConfig = Field(default_factory=ExporterConfig)
     input: InputConfig = Field(default_factory=InputConfig)
+    video: VideoConfig = Field(default_factory=VideoConfig)
 
 
 class PiiPattern(BaseModel):

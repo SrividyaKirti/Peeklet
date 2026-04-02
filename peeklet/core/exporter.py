@@ -62,6 +62,16 @@ MANIFEST_SCHEMA = pa.schema(
         pa.field("visual_reason", pa.string(), nullable=True),
         pa.field("prev_keyframe_id", pa.string(), nullable=True),
         pa.field("prev_keyframe_path", pa.string(), nullable=True),
+        pa.field("source_video", pa.string(), nullable=True),
+        pa.field("video_timestamp", pa.float64(), nullable=True),
+        pa.field("video_frame_number", pa.int32(), nullable=True),
+        pa.field("time_since_prev_keyframe", pa.float64(), nullable=True),
+        pa.field("audio_activity", pa.string(), nullable=True),
+        pa.field("transcript_segment", pa.string(), nullable=True),
+        pa.field("keyframe_index", pa.int32(), nullable=True),
+        pa.field("total_keyframes", pa.int32(), nullable=True),
+        pa.field("video_duration", pa.float64(), nullable=True),
+        pa.field("change_magnitude", pa.string(), nullable=True),
     ]
 )
 
@@ -109,8 +119,22 @@ class ManifestWriter:
                 "visual_reason": result.visual_reason,
                 "prev_keyframe_id": result.prev_keyframe_id,
                 "prev_keyframe_path": result.prev_keyframe_path,
+                "source_video": result.source_video,
+                "video_timestamp": result.video_timestamp,
+                "video_frame_number": result.video_frame_number,
+                "time_since_prev_keyframe": result.time_since_prev_keyframe,
+                "audio_activity": result.audio_activity,
+                "transcript_segment": result.transcript_segment,
+                "keyframe_index": result.keyframe_index,
+                "total_keyframes": result.total_keyframes,
+                "video_duration": result.video_duration,
+                "change_magnitude": result.change_magnitude,
             }
         )
+
+    def clear(self) -> None:
+        """Discard all buffered rows without writing."""
+        self._rows.clear()
 
     def flush(self) -> None:
         if not self._rows:
