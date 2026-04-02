@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from peeklet.config import (
     ComparatorConfig,
@@ -103,6 +104,53 @@ class TestLoadConfig:
     def test_load_none_returns_defaults(self) -> None:
         config = load_config(None)
         assert config == PeekletConfig()
+
+
+class TestVideoConfig:
+    def test_defaults(self) -> None:
+        config = PeekletConfig()
+        assert config.video.sample_fps == 1.0
+        assert config.video.formats == ["mp4", "mov", "webm"]
+        assert config.video.audio_detection is True
+        assert config.video.transcript_path is None
+
+    def test_custom_video_config_from_dict(self) -> None:
+        config = PeekletConfig.model_validate(
+            {
+                "video": {
+                    "sample_fps": 2.0,
+                    "formats": ["mp4"],
+                    "audio_detection": False,
+                    "transcript_path": "/path/to/transcript.srt",
+                }
+            }
+        )
+        assert config.video.sample_fps == 2.0
+        assert config.video.formats == ["mp4"]
+        assert config.video.audio_detection is False
+        assert config.video.transcript_path == "/path/to/transcript.srt"
+
+    def test_sample_fps_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            PeekletConfig.model_validate({"video": {"sample_fps": 0}})
+
+    def test_load_video_config_from_yaml(self, tmp_path: Path) -> None:
+        config_data = {
+            "video": {
+                "sample_fps": 5.0,
+                "formats": ["mp4", "webm"],
+                "audio_detection": False,
+                "transcript_path": "/tmp/captions.srt",
+            }
+        }
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump(config_data))
+
+        config = load_config(config_file)
+        assert config.video.sample_fps == 5.0
+        assert config.video.formats == ["mp4", "webm"]
+        assert config.video.audio_detection is False
+        assert config.video.transcript_path == "/tmp/captions.srt"
 
 
 class TestPatternLoading:

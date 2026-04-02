@@ -82,6 +82,15 @@ class InputConfig(BaseModel):
     sort_by: Literal["filename", "timestamp"] = "filename"
 
 
+class VideoConfig(BaseModel):
+    """Video input settings."""
+
+    sample_fps: float = Field(default=1.0, gt=0.0)
+    formats: List[str] = Field(default_factory=lambda: ["mp4", "mov", "webm"])
+    audio_detection: bool = True
+    transcript_path: Optional[str] = None
+
+
 class PeekletConfig(BaseModel):
     """Root configuration for Peeklet."""
 
@@ -92,6 +101,7 @@ class PeekletConfig(BaseModel):
     redactor: RedactorConfig = Field(default_factory=RedactorConfig)
     exporter: ExporterConfig = Field(default_factory=ExporterConfig)
     input: InputConfig = Field(default_factory=InputConfig)
+    video: VideoConfig = Field(default_factory=VideoConfig)
 
 
 class PiiPattern(BaseModel):
