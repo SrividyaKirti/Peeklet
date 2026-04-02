@@ -8,7 +8,8 @@ import imageio.v3 as iio
 import numpy as np
 import pytest
 
-from peeklet.core.video import VideoDecoder, VideoMeta
+from peeklet.config import PeekletConfig
+from peeklet.core.video import VideoDecoder, VideoMeta, process_video
 
 
 def _make_test_video(path: Path, frames: list[np.ndarray], fps: int = 30) -> Path:
@@ -73,3 +74,82 @@ class TestCoarseExtraction:
             assert frame.dtype == np.uint8
             assert isinstance(ts, float)
             assert isinstance(frame_num, int)
+
+
+class TestSmartSampling:
+    def test_backfill_finds_transition(self, tmp_path: Path) -> None:
+        # 3 seconds: 1.5s black, then 1.5s white (sharp transition at frame 45)
+        frames = (
+            [_solid_frame((0, 0, 0))] * 45
+            + [_solid_frame((255, 255, 255))] * 45
+        )
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.video.sample_fps = 1.0
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        # Should find at least 2 keyframes: first frame + the transition
+        assert len(keyframes) >= 2
+        # First keyframe is always frame 0
+        assert keyframes[0].video_frame_number == 0
+        # Second keyframe should be near frame 45 (the transition),
+        # not at frame 60 (the next coarse sample)
+        assert keyframes[1].video_frame_number is not None
+        assert keyframes[1].video_frame_number < 60
+
+    def test_no_backfill_when_no_transitions(self, tmp_path: Path) -> None:
+        # 2 seconds of solid red — no transitions
+        frames = [_solid_frame((255, 0, 0))] * 60
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.video.sample_fps = 1.0
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        # Only the first frame should be a keyframe
+        assert len(keyframes) == 1
+
+    def test_results_have_video_metadata(self, tmp_path: Path) -> None:
+        frames = (
+            [_solid_frame((255, 0, 0))] * 30
+            + [_solid_frame((0, 255, 0))] * 30
+        )
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        for kf in keyframes:
+            assert kf.source_video == "test.mp4"
+            assert kf.video_timestamp is not None
+            assert kf.video_frame_number is not None
+            assert kf.video_duration is not None
+            assert kf.video_duration == pytest.approx(2.0, abs=0.5)
+            assert kf.keyframe_index is not None
+            assert kf.change_magnitude is not None
+
+    def test_time_since_prev_keyframe(self, tmp_path: Path) -> None:
+        frames = (
+            [_solid_frame((255, 0, 0))] * 30
+            + [_solid_frame((0, 255, 0))] * 30
+        )
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        # First keyframe has no previous
+        assert keyframes[0].time_since_prev_keyframe is None
+        # Second keyframe should have a time gap
+        if len(keyframes) > 1:
+            assert keyframes[1].time_since_prev_keyframe is not None
+            assert keyframes[1].time_since_prev_keyframe > 0

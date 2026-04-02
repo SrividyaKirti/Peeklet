@@ -8,7 +8,10 @@ from typing import Iterator
 
 import numpy as np
 
+from peeklet.config import PeekletConfig
+from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
+from peeklet.utils.types import FrameResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,3 +108,92 @@ class VideoDecoder:
             timestamp = idx / self._fps
             rgb = ensure_rgb_uint8(np.asarray(frame))
             yield rgb, timestamp, idx
+
+
+def _change_magnitude(result: FrameResult) -> str:
+    """Derive change magnitude from SSIM and block count."""
+    if result.ssim_score is None:
+        return "major"  # first frame or dimension change
+    n_blocks = len(result.changed_regions) if result.changed_regions else 0
+    if result.ssim_score < 0.70 or n_blocks > 15:
+        return "major"
+    if result.ssim_score < 0.90 or n_blocks > 5:
+        return "moderate"
+    return "minor"
+
+
+def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
+    """Process a video file through smart sampling + Peeklet pipeline.
+
+    Two-pass strategy:
+    1. Coarse pass at config.video.sample_fps
+    2. Backfill around SKIP->KEYFRAME transitions at native fps
+
+    Returns list of FrameResult for keyframes only.
+    """
+    decoder = VideoDecoder(path)
+    meta = decoder.get_metadata()
+    sample_fps = config.video.sample_fps
+
+    # --- Pass 1: Coarse sampling to find transitions ---
+    coarse_pipeline = Pipeline(config)
+    coarse_samples: list[tuple[np.ndarray, float, int, FrameResult]] = []
+
+    for frame, ts, frame_num in decoder.extract_coarse_frames(sample_fps):
+        frame_id = f"coarse_{frame_num:06d}"
+        result = coarse_pipeline.process_frame(
+            frame, frame_id=frame_id, source_format="video",
+        )
+        coarse_samples.append((frame, ts, frame_num, result))
+
+    # --- Pass 2: Build final frame list with backfill ---
+    all_frames: list[tuple[np.ndarray, float, int]] = []
+
+    for i, (frame, ts, frame_num, result) in enumerate(coarse_samples):
+        if i > 0:
+            prev_result = coarse_samples[i - 1][3]
+            prev_frame_num = coarse_samples[i - 1][2]
+            # SKIP -> KEYFRAME: backfill the gap at native fps
+            if not prev_result.is_keyframe and result.is_keyframe:
+                for bf_frame, bf_ts, bf_num in decoder.extract_frame_range(
+                    prev_frame_num + 1, frame_num
+                ):
+                    all_frames.append((bf_frame, bf_ts, bf_num))
+        all_frames.append((frame, ts, frame_num))
+
+    # --- Final pass: process all frames in order ---
+    final_pipeline = Pipeline(config)
+    results: list[FrameResult] = []
+    keyframe_count = 0
+    prev_keyframe_ts: float | None = None
+
+    for frame, ts, frame_num in all_frames:
+        frame_id = f"frame_{frame_num:06d}"
+        result = final_pipeline.process_frame(
+            frame, frame_id=frame_id, source_format="video",
+        )
+
+        # Enrich with video metadata
+        result.source_video = meta.filename
+        result.video_timestamp = ts
+        result.video_frame_number = frame_num
+        result.video_duration = meta.duration
+
+        if result.is_keyframe:
+            keyframe_count += 1
+            result.frame_id = f"step_{keyframe_count:03d}"
+            result.keyframe_index = keyframe_count
+            result.change_magnitude = _change_magnitude(result)
+            if prev_keyframe_ts is not None:
+                result.time_since_prev_keyframe = ts - prev_keyframe_ts
+            prev_keyframe_ts = ts
+
+        results.append(result)
+
+    # Backfill total_keyframes on all keyframe results
+    for r in results:
+        if r.is_keyframe:
+            r.total_keyframes = keyframe_count
+
+    final_pipeline.finalize()
+    return results
