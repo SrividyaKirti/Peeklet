@@ -30,10 +30,12 @@ from .conftest import (
 
 def _make_config(output_dir: Path) -> PeekletConfig:
     """Create pipeline config for dataset testing."""
-    return PeekletConfig.model_validate({
-        "redactor": {"enabled": False},
-        "exporter": {"output_dir": str(output_dir)},
-    })
+    return PeekletConfig.model_validate(
+        {
+            "redactor": {"enabled": False},
+            "exporter": {"output_dir": str(output_dir)},
+        }
+    )
 
 
 def _run_task(task_id: str, output_dir: Path) -> list[dict]:
@@ -55,17 +57,19 @@ def _run_task(task_id: str, output_dir: Path) -> list[dict]:
             app_name=metadata.get("website", ""),
             window_title=metadata.get("confirmed_task", ""),
         )
-        results.append({
-            "frame_id": result.frame_id,
-            "event_type": result.event_type.value,
-            "is_keyframe": result.is_keyframe,
-            "perceptual_hash": result.perceptual_hash,
-            "ssim_score": result.ssim_score,
-            "change_score": result.change_score,
-            "changed_pct": result.changed_pct,
-            "asset_path": result.asset_path,
-            "action": metadata["actions"][i] if i < len(metadata["actions"]) else None,
-        })
+        results.append(
+            {
+                "frame_id": result.frame_id,
+                "event_type": result.event_type.value,
+                "is_keyframe": result.is_keyframe,
+                "perceptual_hash": result.perceptual_hash,
+                "ssim_score": result.ssim_score,
+                "change_score": result.change_score,
+                "changed_pct": result.changed_pct,
+                "asset_path": result.asset_path,
+                "action": metadata["actions"][i] if i < len(metadata["actions"]) else None,
+            }
+        )
 
     pipeline.finalize()
     return results
@@ -115,9 +119,7 @@ class TestWebTasks:
             total_keyframes += sum(1 for r in results if r["is_keyframe"])
 
         skip_rate = 1 - (total_keyframes / total_frames)
-        assert skip_rate >= 0.2, (
-            f"Expected at least 20% frame reduction, got {skip_rate:.1%}"
-        )
+        assert skip_rate >= 0.2, f"Expected at least 20% frame reduction, got {skip_rate:.1%}"
 
     @skip_no_data
     def test_ssim_scores_within_range(self, results_dir: Path) -> None:
@@ -128,8 +130,7 @@ class TestWebTasks:
             for r in results:
                 if r["ssim_score"] is not None:
                     assert 0.0 <= r["ssim_score"] <= 1.0, (
-                        f"Task {task_id}, {r['frame_id']}: "
-                        f"SSIM {r['ssim_score']} out of range"
+                        f"Task {task_id}, {r['frame_id']}: SSIM {r['ssim_score']} out of range"
                     )
 
     @skip_no_data
@@ -168,10 +169,7 @@ class TestWebTasks:
         task_id = task_ids[0]
         results = _run_task(task_id, results_dir)
 
-        skipped_no_ssim = [
-            r for r in results
-            if not r["is_keyframe"] and r["ssim_score"] is None
-        ]
+        skipped_no_ssim = [r for r in results if not r["is_keyframe"] and r["ssim_score"] is None]
         # If there are any hash-matched skips, verify they have no SSIM
         for r in skipped_no_ssim:
             assert r["ssim_score"] is None

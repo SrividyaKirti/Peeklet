@@ -156,11 +156,17 @@ class Pipeline:
         # Step 3: First frame is always a keyframe
         if self._last_hash is None:
             return self._make_keyframe(
-                frame, masked_frame, frame_id, current_hash, current_mean,
+                frame,
+                masked_frame,
+                frame_id,
+                current_hash,
+                current_mean,
                 visual_reason="First frame in sequence",
                 mask_regions=mask_regions,
-                timestamp=timestamp, app_name=app_name,
-                window_title=window_title, source_format=source_format,
+                timestamp=timestamp,
+                app_name=app_name,
+                window_title=window_title,
+                source_format=source_format,
             )
 
         # Step 3b: Frame dimension change → automatic KEYFRAME
@@ -171,11 +177,17 @@ class Pipeline:
         if dims_changed:
             prev_h, prev_w = self._last_keyframe.shape[:2]
             return self._make_keyframe(
-                frame, masked_frame, frame_id, current_hash, current_mean,
+                frame,
+                masked_frame,
+                frame_id,
+                current_hash,
+                current_mean,
                 visual_reason=f"Dimension change ({prev_w}x{prev_h} -> {w}x{h})",
                 mask_regions=mask_regions,
-                timestamp=timestamp, app_name=app_name,
-                window_title=window_title, source_format=source_format,
+                timestamp=timestamp,
+                app_name=app_name,
+                window_title=window_title,
+                source_format=source_format,
             )
 
         # Step 4: Hash matches AND mean pixel value is close → SKIP (ssim_score stays None)
@@ -238,14 +250,20 @@ class Pipeline:
 
         # Step 7: SSIM below threshold → KEYFRAME
         return self._make_keyframe(
-            frame, masked_frame, frame_id, current_hash, current_mean,
+            frame,
+            masked_frame,
+            frame_id,
+            current_hash,
+            current_mean,
             visual_reason=(
                 f"Significant change — SSIM {comparison.ssim_score:.4f},"
                 f" {comparison.changed_pct:.1f}% of blocks changed"
             ),
             mask_regions=mask_regions,
-            timestamp=timestamp, app_name=app_name,
-            window_title=window_title, source_format=source_format,
+            timestamp=timestamp,
+            app_name=app_name,
+            window_title=window_title,
+            source_format=source_format,
             ssim_score=comparison.ssim_score,
             change_score=comparison.change_score,
             changed_pct=comparison.changed_pct,
