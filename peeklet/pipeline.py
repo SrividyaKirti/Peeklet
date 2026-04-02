@@ -152,6 +152,7 @@ class Pipeline:
 
         # Step 2: Compute perceptual hash — tiled for tall images
         is_tall = h > w * self._config.hasher.tile_aspect_ratio
+        current_tile_means: list[tuple[float, float, float]] | None = None
         if is_tall:
             tile_height = w  # roughly square tiles
             current_hashes = compute_phash_tiled(
@@ -162,23 +163,27 @@ class Pipeline:
             current_hash = current_hashes[0]  # first tile hash as representative
             # Per-tile per-channel means for fine-grained disambiguation
             n_tiles = max(1, math.ceil(h / tile_height))
-            current_tile_means = [
-                tuple(
-                    float(
-                        masked_frame[i * tile_height : min((i + 1) * tile_height, h), :, c].mean()
+            current_tile_means = []
+            for i in range(n_tiles):
+                tile = masked_frame[i * tile_height : min((i + 1) * tile_height, h)]
+                current_tile_means.append(
+                    (
+                        float(tile[:, :, 0].mean()),
+                        float(tile[:, :, 1].mean()),
+                        float(tile[:, :, 2].mean()),
                     )
-                    for c in range(3)
                 )
-                for i in range(n_tiles)
-            ]
         else:
             current_hashes = None
-            current_tile_means = None
             current_hash = compute_phash(masked_frame, hash_size=self._config.hasher.hash_size)
 
         # Per-channel means to disambiguate uniform frames with identical phash
         # (e.g. solid red vs solid green have the same global mean but differ per-channel)
-        current_mean = tuple(float(masked_frame[:, :, c].mean()) for c in range(3))
+        current_mean: tuple[float, float, float] = (
+            float(masked_frame[:, :, 0].mean()),
+            float(masked_frame[:, :, 1].mean()),
+            float(masked_frame[:, :, 2].mean()),
+        )
 
         # Step 3: First frame is always a keyframe
         if self._last_hash is None:
@@ -223,7 +228,7 @@ class Pipeline:
         # Step 4: Hash comparison — tiled or single
         mean_diff = max(
             abs(a - b)
-            for a, b in zip(current_mean, self._last_mean, strict=True)  # type: ignore[union-attr]
+            for a, b in zip(current_mean, self._last_mean, strict=True)  # type: ignore[arg-type]
         )
         if is_tall and current_hashes is not None and self._last_tiled_hashes is not None:
             # For tiled images, check per-tile mean diffs so localized changes aren't swallowed
