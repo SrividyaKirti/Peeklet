@@ -934,4 +934,3 @@ class TestPipelineTiledEdgeCases:
         pipeline.process_frame(red_tall, frame_id="red")
         result = pipeline.process_frame(green_tall, frame_id="green")
         assert result.is_keyframe
-
