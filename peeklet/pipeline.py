@@ -53,8 +53,8 @@ class Pipeline:
         self._last_mean: float | None = None  # mean pixel value for uniform-frame disambiguation
         self._last_keyframe_id: str | None = None
         self._last_keyframe_path: str | None = None
-        self._last_tiled_hashes = None
-        self._last_tile_means = None  # per-tile mean pixel values for tiled hash disambiguation
+        self._last_tiled_hashes: list[str] | None = None
+        self._last_tile_means: list[float] | None = None
 
         # Build redaction pattern set (if redactor enabled)
         custom_patterns: list = []
@@ -220,12 +220,13 @@ class Pipeline:
             # For tiled images, check per-tile mean diffs so localized changes aren't swallowed
             # by a small global mean diff
             if (
-                self._last_tile_means is not None
-                and len(current_tile_means) == len(self._last_tile_means)  # type: ignore[arg-type]
+                current_tile_means is not None
+                and self._last_tile_means is not None
+                and len(current_tile_means) == len(self._last_tile_means)
             ):
                 max_tile_mean_diff = max(
                     abs(cm - lm)
-                    for cm, lm in zip(current_tile_means, self._last_tile_means, strict=True)  # type: ignore[arg-type]
+                    for cm, lm in zip(current_tile_means, self._last_tile_means, strict=True)
                 )
             else:
                 max_tile_mean_diff = mean_diff

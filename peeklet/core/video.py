@@ -122,6 +122,8 @@ class VideoDecoder:
         container.seek(target_ts)
 
         for frame in container.decode(stream):
+            if frame.pts is None or stream.time_base is None:
+                continue
             idx = int(frame.pts * stream.time_base * self._fps)
             if idx < start_frame:
                 continue

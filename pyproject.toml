@@ -39,6 +39,7 @@ ocr = [
 ]
 video = [
     "imageio[ffmpeg]>=2.31",
+    "av>=14.0",
     "pydub>=0.25",
 ]
 dev = [
