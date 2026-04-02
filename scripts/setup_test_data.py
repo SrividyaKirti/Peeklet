@@ -27,14 +27,18 @@ def download_tasks(num_tasks: int = 10, split: str = "test_task") -> None:
         print("  pip install 'peeklet[datasets]'")
         sys.exit(1)
 
-    print(f"Loading {split} split from {HF_DATASET}...")
-    ds = load_dataset(HF_DATASET, split=split)
+    print(f"Streaming {split} split from {HF_DATASET}...")
+    ds = load_dataset(HF_DATASET, split=split, streaming=True)
 
     # Group rows by annotation_id (each row is one action step)
+    # Streaming mode: iterate and collect only until we have enough tasks
     tasks: dict[str, list] = {}
     for row in ds:
         task_id = row["annotation_id"]
         if task_id not in tasks:
+            if len(tasks) >= num_tasks:
+                # Check if this row belongs to an existing task
+                continue
             tasks[task_id] = []
         tasks[task_id].append(row)
 
@@ -42,9 +46,8 @@ def download_tasks(num_tasks: int = 10, split: str = "test_task") -> None:
     for task_id in tasks:
         tasks[task_id].sort(key=lambda r: int(r["target_action_index"]))
 
-    # Take first N tasks
     selected_ids = list(tasks.keys())[:num_tasks]
-    print(f"Found {len(tasks)} tasks, selecting {len(selected_ids)}...")
+    print(f"Collected {len(selected_ids)} tasks from stream...")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 

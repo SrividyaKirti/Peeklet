@@ -1,37 +1,31 @@
-"""Generate a self-contained HTML report from Peeklet pipeline results.
+"""Generate an HTML report from Peeklet pipeline results.
 
 Usage:
     python scripts/generate_report.py [results_dir] [-o report.html]
 
 Reads summary.json and per-task results.json from the results directory.
-Produces a standalone HTML file with embedded images and interactive UI.
+Produces an HTML file that references images via relative paths.
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
+import shutil
 import sys
 from pathlib import Path
 
 
-def encode_image_base64(path: Path) -> str:
-    """Encode an image file as a base64 data URI."""
-    data = path.read_bytes()
-    return f"data:image/png;base64,{base64.b64encode(data).decode()}"
-
-
-def load_results(results_dir: Path) -> dict:
-    """Load summary and all per-task results."""
+def load_results(results_dir: Path, images_dir: Path) -> dict:
+    """Load summary and all per-task results, copying images to report images dir."""
     summary_path = results_dir / "summary.json"
     if not summary_path.exists():
         print(f"Error: {summary_path} not found. Run scripts/run_dataset_tests.py first.")
         sys.exit(1)
 
     summary = json.loads(summary_path.read_text())
+    images_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load per-task details and encode images
     for task in summary["tasks"]:
         task_dir = results_dir / task["task_id"]
         task_results_path = task_dir / "results.json"
@@ -39,20 +33,30 @@ def load_results(results_dir: Path) -> dict:
             task_detail = json.loads(task_results_path.read_text())
             task["frames"] = task_detail["frames"]
 
-            # Encode source images from dataset
+            # Source images from dataset
             data_task_dir = (
                 Path(__file__).resolve().parent.parent
                 / "tests" / "datasets" / "data" / "web_tasks" / task["task_id"]
             )
+            task_images = images_dir / task["task_id"]
+            task_images.mkdir(parents=True, exist_ok=True)
+
             for frame in task["frames"]:
+                # Copy source screenshot
                 src_img = data_task_dir / frame["source_image"]
                 if src_img.exists():
-                    frame["source_image_b64"] = encode_image_base64(src_img)
-                # Encode keyframe image if it exists
+                    dest = task_images / frame["source_image"]
+                    shutil.copy2(src_img, dest)
+                    frame["source_image_path"] = f"images/{task['task_id']}/{frame['source_image']}"
+
+                # Copy keyframe image
                 if frame["asset_path"]:
                     asset = Path(frame["asset_path"])
                     if asset.exists():
-                        frame["keyframe_image_b64"] = encode_image_base64(asset)
+                        kf_name = f"kf_{frame['frame_id']}.png"
+                        dest = task_images / kf_name
+                        shutil.copy2(asset, dest)
+                        frame["keyframe_image_path"] = f"images/{task['task_id']}/{kf_name}"
 
     return summary
 
@@ -104,7 +108,6 @@ body {{
     grid-template-columns: 300px 1fr;
     height: 100vh;
 }}
-/* Top bar */
 .topbar {{
     grid-column: 1 / -1;
     background: var(--bg-card);
@@ -134,7 +137,6 @@ body {{
     cursor: pointer;
     font-size: 13px;
 }}
-/* Sidebar */
 .sidebar {{
     background: var(--bg-sidebar);
     overflow-y: auto;
@@ -152,7 +154,6 @@ body {{
 .task-item.active {{ background: var(--bg-card); border-color: var(--accent); }}
 .task-name {{ font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .task-meta {{ font-size: 11px; color: var(--text-muted); margin-top: 2px; }}
-/* Main area */
 .main {{
     overflow-y: auto;
     padding: 16px;
@@ -305,16 +306,16 @@ function renderFrame(frame, index, task) {{
     const opStr = frame.action && frame.action.operation ? frame.action.operation.op || '' : '';
 
     let imageSection = '';
-    if (frame.source_image_b64) {{
-        if (isKF && frame.keyframe_image_b64) {{
+    if (frame.source_image_path) {{
+        if (isKF && frame.keyframe_image_path) {{
             imageSection = `
                 <div class="image-compare">
-                    <div><img src="${{frame.source_image_b64}}"><div class="image-label">Source Screenshot</div></div>
-                    <div><img src="${{frame.keyframe_image_b64}}"><div class="image-label">Saved Keyframe</div></div>
+                    <div><img src="${{frame.source_image_path}}" loading="lazy"><div class="image-label">Source Screenshot</div></div>
+                    <div><img src="${{frame.keyframe_image_path}}" loading="lazy"><div class="image-label">Saved Keyframe</div></div>
                 </div>
             `;
         }} else {{
-            imageSection = `<img src="${{frame.source_image_b64}}">`;
+            imageSection = `<img src="${{frame.source_image_path}}" loading="lazy">`;
         }}
     }}
 
@@ -358,14 +359,16 @@ def main() -> None:
 
     results_dir = Path(args.results_dir)
     output_path = Path(args.output) if args.output else results_dir / "report.html"
+    images_dir = output_path.parent / "images"
 
     print(f"Loading results from {results_dir}...")
-    summary = load_results(results_dir)
+    summary = load_results(results_dir, images_dir)
     print(f"Generating report for {len(summary['tasks'])} tasks...")
     html = generate_html(summary)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html)
     print(f"Report saved to {output_path}")
+    print(f"Images copied to {images_dir}")
 
 
 if __name__ == "__main__":
