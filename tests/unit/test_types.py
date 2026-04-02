@@ -85,3 +85,58 @@ class TestFrameResult:
         assert result.ssim_score is None
         assert result.changed_regions is None
         assert result.asset_path is None
+
+
+class TestFrameResultVideoFields:
+    def _minimal_result(self) -> FrameResult:
+        return FrameResult(
+            frame_id="frame_001",
+            event_type=EventType.KEYFRAME,
+            is_keyframe=True,
+            perceptual_hash="abcd1234",
+            frame_width=1920,
+            frame_height=1080,
+        )
+
+    def test_video_fields_default_to_none(self) -> None:
+        result = self._minimal_result()
+        assert result.source_video is None
+        assert result.video_timestamp is None
+        assert result.video_frame_number is None
+        assert result.time_since_prev_keyframe is None
+        assert result.audio_activity is None
+        assert result.transcript_segment is None
+        assert result.keyframe_index is None
+        assert result.total_keyframes is None
+        assert result.video_duration is None
+        assert result.change_magnitude is None
+
+    def test_video_fields_set_explicitly(self) -> None:
+        result = FrameResult(
+            frame_id="frame_001",
+            event_type=EventType.KEYFRAME,
+            is_keyframe=True,
+            perceptual_hash="abcd1234",
+            frame_width=1920,
+            frame_height=1080,
+            source_video="/path/to/video.mp4",
+            video_timestamp=12.5,
+            video_frame_number=375,
+            time_since_prev_keyframe=4.2,
+            audio_activity="speech",
+            transcript_segment="Hello world",
+            keyframe_index=3,
+            total_keyframes=42,
+            video_duration=120.0,
+            change_magnitude="high",
+        )
+        assert result.source_video == "/path/to/video.mp4"
+        assert result.video_timestamp == 12.5
+        assert result.video_frame_number == 375
+        assert result.time_since_prev_keyframe == 4.2
+        assert result.audio_activity == "speech"
+        assert result.transcript_segment == "Hello world"
+        assert result.keyframe_index == 3
+        assert result.total_keyframes == 42
+        assert result.video_duration == 120.0
+        assert result.change_magnitude == "high"
