@@ -123,6 +123,35 @@ class Pipeline:
             self._writer.append(result)
             return result
 
+        # Step 3b: Frame dimension change → automatic KEYFRAME
+        # Different resolution means a completely different screen (e.g., page navigation).
+        if self._last_keyframe is not None and masked_frame.shape[:2] != self._last_keyframe.shape[:2]:
+            asset_path = save_keyframe(
+                frame,
+                self._output_dir,
+                frame_id,
+                fmt=self._config.exporter.keyframe_format,
+            )
+            result = FrameResult(
+                frame_id=frame_id,
+                event_type=EventType.KEYFRAME,
+                is_keyframe=True,
+                perceptual_hash=current_hash,
+                frame_width=w,
+                frame_height=h,
+                timestamp=timestamp,
+                app_name=app_name,
+                window_title=window_title,
+                source_format=source_format,
+                adaptive_mask=mask_regions if mask_regions else None,
+                asset_path=str(asset_path),
+            )
+            self._last_hash = current_hash
+            self._last_keyframe = masked_frame
+            self._last_mean = current_mean
+            self._writer.append(result)
+            return result
+
         # Step 4: Hash matches AND mean pixel value is close → SKIP (ssim_score stays None)
         # We also check mean pixel difference to handle uniform frames that share the same phash
         # (phash returns 0000...0000 for any uniform image regardless of brightness).
