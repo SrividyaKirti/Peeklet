@@ -63,5 +63,5 @@ def tiled_hashes_match(
         return False
     return all(
         hashes_match(ha, hb, tolerance=tolerance)
-        for ha, hb in zip(hashes_a, hashes_b)
+        for ha, hb in zip(hashes_a, hashes_b, strict=True)
     )

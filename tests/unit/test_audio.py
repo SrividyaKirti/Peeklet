@@ -2,7 +2,15 @@
 
 from pathlib import Path
 
+import pytest
+
 from peeklet.core.audio import TranscriptSegment, align_transcript, parse_transcript
+
+try:
+    import pydub  # noqa: F401
+    _has_pydub = True
+except ImportError:
+    _has_pydub = False
 
 
 class TestParseSrt:
@@ -104,6 +112,7 @@ class TestAlignTranscript:
         assert align_transcript(1.0, []) is None
 
 
+@pytest.mark.skipif(not _has_pydub, reason="requires peeklet[video]")
 class TestSpeechSilenceDetection:
     def test_detect_speech_in_audio(self, tmp_path: Path) -> None:
         from pydub import AudioSegment

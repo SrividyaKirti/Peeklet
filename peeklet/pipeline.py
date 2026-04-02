@@ -225,11 +225,14 @@ class Pipeline:
             ):
                 max_tile_mean_diff = max(
                     abs(cm - lm)
-                    for cm, lm in zip(current_tile_means, self._last_tile_means)  # type: ignore[arg-type]
+                    for cm, lm in zip(current_tile_means, self._last_tile_means, strict=True)  # type: ignore[arg-type]
                 )
             else:
                 max_tile_mean_diff = mean_diff
-            hash_matched = tiled_hashes_match(current_hashes, self._last_tiled_hashes) and max_tile_mean_diff < 5.0
+            hash_matched = (
+                tiled_hashes_match(current_hashes, self._last_tiled_hashes)
+                and max_tile_mean_diff < 5.0
+            )
         else:
             hash_matched = hashes_match(current_hash, self._last_hash) and mean_diff < 5.0
 

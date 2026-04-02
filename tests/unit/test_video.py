@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import imageio.v3 as iio
 import numpy as np
 import pytest
 
-from peeklet.config import PeekletConfig
-from peeklet.core.video import VideoDecoder, VideoMeta, process_video
+iio = pytest.importorskip("imageio.v3", reason="requires peeklet[video]")
+pytest.importorskip("av", reason="requires peeklet[video]")
+
+from peeklet.config import PeekletConfig  # noqa: E402
+from peeklet.core.video import VideoDecoder, VideoMeta, process_video  # noqa: E402
 
 
 def _make_test_video(path: Path, frames: list[np.ndarray], fps: int = 30) -> Path:

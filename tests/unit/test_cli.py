@@ -4,10 +4,17 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
+import pytest
 from click.testing import CliRunner
 from PIL import Image
 
 from peeklet.cli import main
+
+try:
+    import av  # noqa: F401
+    _has_video_deps = True
+except ImportError:
+    _has_video_deps = False
 
 
 def _create_test_images(directory: Path, count: int = 5) -> None:
@@ -70,6 +77,7 @@ class TestCli:
         assert "0.1.0" in result.output
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 class TestVideoCliDetection:
     def test_video_file_input(self, tmp_path: Path) -> None:
         """CLI accepts a video file as --input."""

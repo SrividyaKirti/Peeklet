@@ -133,7 +133,8 @@ class TestTiledDetection:
 
         assert result_a.is_keyframe is True
         assert result_b.is_keyframe is True
-        assert "block" in (result_b.visual_reason or "").lower() or "localized" in (result_b.visual_reason or "").lower()
+        reason = (result_b.visual_reason or "").lower()
+        assert "block" in reason or "localized" in reason
 
     def test_small_change_on_tall_image_skipped_without_tiling(self, tmp_output: Path) -> None:
         """Without tiled pHash, a small change on a tall image gets skipped at the hash gate."""

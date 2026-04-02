@@ -2,12 +2,16 @@
 
 from pathlib import Path
 
-import imageio.v3 as iio
 import numpy as np
-import pyarrow.parquet as pq
+import pytest
 
-from peeklet.config import PeekletConfig
-from peeklet.core.video import process_video
+iio = pytest.importorskip("imageio.v3", reason="requires peeklet[video]")
+pytest.importorskip("av", reason="requires peeklet[video]")
+
+import pyarrow.parquet as pq  # noqa: E402
+
+from peeklet.config import PeekletConfig  # noqa: E402
+from peeklet.core.video import process_video  # noqa: E402
 
 
 def _solid_frame(color: tuple[int, int, int], w: int = 320, h: int = 240) -> np.ndarray:
