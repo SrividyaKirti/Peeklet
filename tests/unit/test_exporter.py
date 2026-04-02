@@ -149,7 +149,9 @@ class TestManifestVideoColumns:
         for col, expected_val in expected.items():
             assert col in table.column_names, f"Column '{col}' missing from manifest"
             actual = table.column(col)[0].as_py()
-            assert actual == expected_val, f"Column '{col}': expected {expected_val!r}, got {actual!r}"
+            assert actual == expected_val, (
+                f"Column '{col}': expected {expected_val!r}, got {actual!r}"
+            )
 
     def test_video_columns_null_for_image_frames(self, tmp_output: Path) -> None:
         writer = ManifestWriter(tmp_output / "manifest.parquet")
@@ -181,4 +183,6 @@ class TestManifestVideoColumns:
         ]
         for col in video_columns:
             assert col in table.column_names, f"Column '{col}' missing from manifest"
-            assert table.column(col)[0].as_py() is None, f"Column '{col}' should be null for image frames"
+            assert table.column(col)[0].as_py() is None, (
+                f"Column '{col}' should be null for image frames"
+            )

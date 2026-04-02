@@ -4,21 +4,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from peeklet.config import PeekletConfig
 from peeklet.core.audio import (
     align_transcript,
     detect_speech_segments,
     get_audio_activity,
     parse_transcript,
-    TranscriptSegment,
 )
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
-from peeklet.utils.types import FrameResult
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from peeklet.config import PeekletConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.utils.types import FrameResult
 
 
 @dataclass(frozen=True, slots=True)

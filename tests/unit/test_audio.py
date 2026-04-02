@@ -1,12 +1,8 @@
 """Tests for the audio module — transcript parsing and speech detection."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
-import pytest
-
-from peeklet.core.audio import parse_transcript, TranscriptSegment, align_transcript
+from peeklet.core.audio import TranscriptSegment, align_transcript, parse_transcript
 
 
 class TestParseSrt:

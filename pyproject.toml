@@ -87,6 +87,7 @@ module = [
     "imagehash.*",
     "skimage.*",
     "imageio.*",
+    "imageio_ffmpeg.*",
     "pydub.*",
 ]
 ignore_missing_imports = true

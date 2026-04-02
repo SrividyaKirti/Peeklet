@@ -101,8 +101,9 @@ def align_transcript(timestamp: float, segments: list[TranscriptSegment]) -> str
 def _check_audio_deps() -> None:
     """Raise a clear error if audio dependencies are not installed."""
     try:
-        import imageio_ffmpeg
         import os
+
+        import imageio_ffmpeg
 
         os.environ.setdefault("FFMPEG_BINARY", imageio_ffmpeg.get_ffmpeg_exe())
         from pydub import AudioSegment
@@ -148,7 +149,6 @@ def detect_speech_segments(
         is_speech = chunk.dBFS > silence_threshold_dbfs
 
         start_s = chunk_start_ms / 1000.0
-        end_s = chunk_end_ms / 1000.0
 
         if is_speech:
             if current_start is None:

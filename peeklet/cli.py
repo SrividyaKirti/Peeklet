@@ -117,7 +117,7 @@ def main(
         _run_image_mode(input_path, config, image_extensions)
 
 
-def _run_video_mode(input_path: Path, config: "peeklet.config.PeekletConfig") -> None:
+def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> None:
     """Process video file(s)."""
     from peeklet.core.video import process_video
 
@@ -152,7 +152,7 @@ def _run_video_mode(input_path: Path, config: "peeklet.config.PeekletConfig") ->
 
 def _run_image_mode(
     input_dir: Path,
-    config: "peeklet.config.PeekletConfig",
+    config: peeklet.config.PeekletConfig,
     extensions: set[str],
 ) -> None:
     """Process image directory (existing behavior)."""
