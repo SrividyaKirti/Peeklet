@@ -106,3 +106,122 @@ class TestPipelineBatch:
         )
         assert result.app_name == "Chrome"
         assert result.window_title == "Google"
+
+
+class TestTiledDetection:
+    def test_small_change_on_tall_image_detected(self, tmp_output: Path) -> None:
+        """A small localized change on a tall full-page screenshot must be detected."""
+        config = PeekletConfig.model_validate(
+            {
+                "redactor": {"enabled": False},
+                "exporter": {"output_dir": str(tmp_output)},
+                "masking": {"block_size": 32, "window_size": 5, "noise_threshold": 0.8},
+                "comparator": {"ssim_threshold": 0.85, "min_changed_blocks": 2},
+                "hasher": {"tile_aspect_ratio": 1.5},
+            }
+        )
+        pipeline = Pipeline(config)
+
+        # Simulate a full-page screenshot (200 wide, 600 tall -> aspect 3.0 > 1.5)
+        frame_a = np.full((600, 200, 3), 220, dtype=np.uint8)
+        frame_b = frame_a.copy()
+        # Small change in the middle: simulate typed text (black on light background)
+        frame_b[280:310, 80:140] = [10, 10, 10]
+
+        result_a = pipeline.process_frame(frame_a, frame_id="frame_000")
+        result_b = pipeline.process_frame(frame_b, frame_id="frame_001")
+
+        assert result_a.is_keyframe is True
+        assert result_b.is_keyframe is True
+        assert "block" in (result_b.visual_reason or "").lower() or "localized" in (result_b.visual_reason or "").lower()
+
+    def test_small_change_on_tall_image_skipped_without_tiling(self, tmp_output: Path) -> None:
+        """Without tiled pHash, a small change on a tall image gets skipped at the hash gate."""
+        config = PeekletConfig.model_validate(
+            {
+                "redactor": {"enabled": False},
+                "exporter": {"output_dir": str(tmp_output)},
+                "masking": {"block_size": 32, "window_size": 5, "noise_threshold": 0.8},
+                "comparator": {"ssim_threshold": 0.85, "min_changed_blocks": 2},
+                # Very high aspect ratio threshold -> tiling never activates
+                "hasher": {"tile_aspect_ratio": 100.0},
+            }
+        )
+        pipeline = Pipeline(config)
+
+        frame_a = np.full((600, 200, 3), 220, dtype=np.uint8)
+        frame_b = frame_a.copy()
+        frame_b[280:310, 80:140] = [10, 10, 10]
+
+        pipeline.process_frame(frame_a, frame_id="frame_000")
+        result_b = pipeline.process_frame(frame_b, frame_id="frame_001")
+
+        # Without tiling, pHash matches -> skipped
+        assert result_b.is_keyframe is False
+
+    def test_identical_tall_frames_still_skipped(self, tmp_output: Path) -> None:
+        """Tiling should not cause false positives on identical tall frames."""
+        config = PeekletConfig.model_validate(
+            {
+                "redactor": {"enabled": False},
+                "exporter": {"output_dir": str(tmp_output)},
+                "masking": {"block_size": 32, "window_size": 5, "noise_threshold": 0.8},
+                "comparator": {"ssim_threshold": 0.85, "min_changed_blocks": 2},
+                "hasher": {"tile_aspect_ratio": 1.5},
+            }
+        )
+        pipeline = Pipeline(config)
+
+        frame = np.full((600, 200, 3), 220, dtype=np.uint8)
+
+        pipeline.process_frame(frame, frame_id="frame_000")
+        result = pipeline.process_frame(frame, frame_id="frame_001")
+
+        assert result.is_keyframe is False
+
+    def test_block_count_triggers_keyframe_even_with_high_ssim(self, tmp_output: Path) -> None:
+        """Block count threshold should trigger keyframe even when SSIM is above threshold."""
+        config = PeekletConfig.model_validate(
+            {
+                "redactor": {"enabled": False},
+                "exporter": {"output_dir": str(tmp_output)},
+                "masking": {"block_size": 32, "window_size": 5, "noise_threshold": 0.8},
+                # Very high SSIM threshold -- normally would skip
+                "comparator": {"ssim_threshold": 0.99, "min_changed_blocks": 1},
+                "hasher": {"tile_aspect_ratio": 1.5},
+            }
+        )
+        pipeline = Pipeline(config)
+
+        frame_a = np.full((600, 200, 3), 220, dtype=np.uint8)
+        frame_b = frame_a.copy()
+        # Change enough blocks to exceed min_changed_blocks=1
+        frame_b[280:320, 80:150] = [10, 10, 10]
+
+        pipeline.process_frame(frame_a, frame_id="frame_000")
+        result_b = pipeline.process_frame(frame_b, frame_id="frame_001")
+
+        assert result_b.is_keyframe is True
+
+    def test_non_tall_image_uses_single_hash(self, tmp_output: Path) -> None:
+        """Normal aspect ratio images should use single pHash (existing behavior)."""
+        config = PeekletConfig.model_validate(
+            {
+                "redactor": {"enabled": False},
+                "exporter": {"output_dir": str(tmp_output)},
+                "masking": {"block_size": 50, "window_size": 5, "noise_threshold": 0.8},
+                "comparator": {"ssim_threshold": 0.85},
+                "hasher": {"tile_aspect_ratio": 1.5},
+            }
+        )
+        pipeline = Pipeline(config)
+
+        # Square image -- not tall
+        frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+        pipeline.process_frame(frame, frame_id="frame_000")
+        result = pipeline.process_frame(frame, frame_id="frame_001")
+
+        # Identical frames still skipped -- same behavior as before
+        assert result.is_keyframe is False
+        assert result.ssim_score is None  # skipped at hash gate

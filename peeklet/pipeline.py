@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from peeklet.config import PeekletConfig, load_patterns
 from peeklet.core.comparator import compare_frames
 from peeklet.core.exporter import ManifestWriter, save_keyframe
-from peeklet.core.hasher import compute_phash, hashes_match
+from peeklet.core.hasher import compute_phash, compute_phash_tiled, hashes_match, tiled_hashes_match
 from peeklet.core.masking import AdaptiveMask
 from peeklet.core.redactor import build_pattern_set
 from peeklet.utils.types import EventType, FrameResult
@@ -52,6 +53,8 @@ class Pipeline:
         self._last_mean: float | None = None  # mean pixel value for uniform-frame disambiguation
         self._last_keyframe_id: str | None = None
         self._last_keyframe_path: str | None = None
+        self._last_tiled_hashes = None
+        self._last_tile_means = None  # per-tile mean pixel values for tiled hash disambiguation
 
         # Build redaction pattern set (if redactor enabled)
         custom_patterns: list = []
@@ -147,14 +150,34 @@ class Pipeline:
         # Step 1: Apply adaptive mask
         masked_frame, mask_regions = self._mask.apply(frame)
 
-        # Step 2: Compute perceptual hash of masked frame
-        current_hash = compute_phash(masked_frame, hash_size=self._config.hasher.hash_size)
+        # Step 2: Compute perceptual hash — tiled for tall images
+        is_tall = h > w * self._config.hasher.tile_aspect_ratio
+        if is_tall:
+            tile_height = w  # roughly square tiles
+            current_hashes = compute_phash_tiled(
+                masked_frame,
+                hash_size=self._config.hasher.hash_size,
+                tile_height=tile_height,
+            )
+            current_hash = current_hashes[0]  # first tile hash as representative
+            # Per-tile means for fine-grained disambiguation on uniform-background tiles
+            n_tiles = max(1, math.ceil(h / tile_height))
+            current_tile_means = [
+                float(masked_frame[i * tile_height : min((i + 1) * tile_height, h)].mean())
+                for i in range(n_tiles)
+            ]
+        else:
+            current_hashes = None
+            current_tile_means = None
+            current_hash = compute_phash(masked_frame, hash_size=self._config.hasher.hash_size)
 
         # Compute mean pixel value (used to disambiguate uniform frames with identical phash)
         current_mean = float(masked_frame.mean())
 
         # Step 3: First frame is always a keyframe
         if self._last_hash is None:
+            self._last_tiled_hashes = current_hashes
+            self._last_tile_means = current_tile_means
             return self._make_keyframe(
                 frame,
                 masked_frame,
@@ -175,6 +198,8 @@ class Pipeline:
             and masked_frame.shape[:2] != self._last_keyframe.shape[:2]
         ):
             prev_h, prev_w = self._last_keyframe.shape[:2]
+            self._last_tiled_hashes = current_hashes
+            self._last_tile_means = current_tile_means
             return self._make_keyframe(
                 frame,
                 masked_frame,
@@ -189,9 +214,26 @@ class Pipeline:
                 source_format=source_format,
             )
 
-        # Step 4: Hash matches AND mean pixel value is close → SKIP (ssim_score stays None)
+        # Step 4: Hash comparison — tiled or single
         mean_diff = abs(current_mean - self._last_mean)  # type: ignore[operator]
-        if hashes_match(current_hash, self._last_hash) and mean_diff < 5.0:
+        if is_tall and current_hashes is not None and self._last_tiled_hashes is not None:
+            # For tiled images, check per-tile mean diffs so localized changes aren't swallowed
+            # by a small global mean diff
+            if (
+                self._last_tile_means is not None
+                and len(current_tile_means) == len(self._last_tile_means)  # type: ignore[arg-type]
+            ):
+                max_tile_mean_diff = max(
+                    abs(cm - lm)
+                    for cm, lm in zip(current_tile_means, self._last_tile_means)  # type: ignore[arg-type]
+                )
+            else:
+                max_tile_mean_diff = mean_diff
+            hash_matched = tiled_hashes_match(current_hashes, self._last_tiled_hashes) and max_tile_mean_diff < 5.0
+        else:
+            hash_matched = hashes_match(current_hash, self._last_hash) and mean_diff < 5.0
+
+        if hash_matched:
             result = FrameResult(
                 frame_id=frame_id,
                 event_type=EventType.SKIPPED,
@@ -219,55 +261,72 @@ class Pipeline:
             block_size=self._config.masking.block_size,
         )
 
-        # Step 6: SSIM above threshold → SKIP
-        if comparison.ssim_score > self._config.comparator.ssim_threshold:
-            result = FrameResult(
-                frame_id=frame_id,
-                event_type=EventType.SKIPPED,
-                is_keyframe=False,
-                perceptual_hash=current_hash,
-                frame_width=w,
-                frame_height=h,
+        # Step 6: Check both SSIM threshold AND block count
+        n_changed_blocks = len(comparison.changed_regions)
+        block_count_exceeded = n_changed_blocks > self._config.comparator.min_changed_blocks
+        ssim_below_threshold = comparison.ssim_score <= self._config.comparator.ssim_threshold
+
+        if ssim_below_threshold or block_count_exceeded:
+            # KEYFRAME — either SSIM says significant change, or enough blocks changed
+            if block_count_exceeded and not ssim_below_threshold:
+                reason = (
+                    f"Localized change — SSIM {comparison.ssim_score:.4f}"
+                    f" above threshold but {n_changed_blocks} blocks changed"
+                    f" (>{self._config.comparator.min_changed_blocks})"
+                )
+            else:
+                reason = (
+                    f"Significant change — SSIM {comparison.ssim_score:.4f},"
+                    f" {comparison.changed_pct:.1f}% of blocks changed"
+                )
+            self._last_tiled_hashes = current_hashes
+            self._last_tile_means = current_tile_means
+            return self._make_keyframe(
+                frame,
+                masked_frame,
+                frame_id,
+                current_hash,
+                current_mean,
+                visual_reason=reason,
+                mask_regions=mask_regions,
                 timestamp=timestamp,
                 app_name=app_name,
                 window_title=window_title,
                 source_format=source_format,
-                adaptive_mask=mask_regions if mask_regions else None,
                 ssim_score=comparison.ssim_score,
                 change_score=comparison.change_score,
                 changed_pct=comparison.changed_pct,
                 changed_regions=comparison.changed_regions if comparison.changed_regions else None,
-                visual_reason=(
-                    f"Minor change — SSIM {comparison.ssim_score:.4f}"
-                    f" above threshold {self._config.comparator.ssim_threshold}"
-                ),
-                prev_keyframe_id=self._last_keyframe_id,
-                prev_keyframe_path=self._last_keyframe_path,
             )
-            self._writer.append(result)
-            return result
 
-        # Step 7: SSIM below threshold → KEYFRAME
-        return self._make_keyframe(
-            frame,
-            masked_frame,
-            frame_id,
-            current_hash,
-            current_mean,
-            visual_reason=(
-                f"Significant change — SSIM {comparison.ssim_score:.4f},"
-                f" {comparison.changed_pct:.1f}% of blocks changed"
-            ),
-            mask_regions=mask_regions,
+        # Step 7: SSIM above threshold AND block count below threshold → SKIP
+        result = FrameResult(
+            frame_id=frame_id,
+            event_type=EventType.SKIPPED,
+            is_keyframe=False,
+            perceptual_hash=current_hash,
+            frame_width=w,
+            frame_height=h,
             timestamp=timestamp,
             app_name=app_name,
             window_title=window_title,
             source_format=source_format,
+            adaptive_mask=mask_regions if mask_regions else None,
             ssim_score=comparison.ssim_score,
             change_score=comparison.change_score,
             changed_pct=comparison.changed_pct,
             changed_regions=comparison.changed_regions if comparison.changed_regions else None,
+            visual_reason=(
+                f"Minor change — SSIM {comparison.ssim_score:.4f}"
+                f" above threshold {self._config.comparator.ssim_threshold},"
+                f" {n_changed_blocks} blocks changed"
+                f" (\u2264{self._config.comparator.min_changed_blocks})"
+            ),
+            prev_keyframe_id=self._last_keyframe_id,
+            prev_keyframe_path=self._last_keyframe_path,
         )
+        self._writer.append(result)
+        return result
 
     def finalize(self) -> None:
         """Flush the manifest writer to disk."""
