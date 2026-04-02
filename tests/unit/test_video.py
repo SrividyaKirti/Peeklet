@@ -153,3 +153,64 @@ class TestSmartSampling:
         if len(keyframes) > 1:
             assert keyframes[1].time_since_prev_keyframe is not None
             assert keyframes[1].time_since_prev_keyframe > 0
+
+
+class TestAudioEnrichment:
+    def test_audio_activity_populated_when_enabled(self, tmp_path: Path) -> None:
+        frames = (
+            [_solid_frame((0, 0, 0))] * 30
+            + [_solid_frame((255, 255, 255))] * 30
+        )
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.video.audio_detection = True
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        for kf in keyframes:
+            assert kf.audio_activity in ("speech", "silence")
+
+    def test_audio_activity_none_when_disabled(self, tmp_path: Path) -> None:
+        frames = [_solid_frame((0, 0, 0))] * 30
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.video.audio_detection = False
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        for kf in keyframes:
+            assert kf.audio_activity is None
+
+    def test_transcript_alignment(self, tmp_path: Path) -> None:
+        frames = (
+            [_solid_frame((0, 0, 0))] * 60
+            + [_solid_frame((255, 255, 255))] * 60
+        )
+        video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text(
+            "1\n"
+            "00:00:00,000 --> 00:00:01,500\n"
+            "Welcome to the demo\n"
+            "\n"
+            "2\n"
+            "00:00:02,000 --> 00:00:03,500\n"
+            "Now click here\n"
+            "\n"
+        )
+
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.video.transcript_path = str(srt_path)
+
+        results = process_video(video_path, config)
+        keyframes = [r for r in results if r.is_keyframe]
+
+        # First keyframe at t=0 should match first transcript segment
+        assert keyframes[0].transcript_segment is not None
+        assert "Welcome" in keyframes[0].transcript_segment

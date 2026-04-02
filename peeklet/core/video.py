@@ -9,6 +9,13 @@ from typing import Iterator
 import numpy as np
 
 from peeklet.config import PeekletConfig
+from peeklet.core.audio import (
+    align_transcript,
+    detect_speech_segments,
+    get_audio_activity,
+    parse_transcript,
+    TranscriptSegment,
+)
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
 from peeklet.utils.types import FrameResult
@@ -194,6 +201,35 @@ def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
     for r in results:
         if r.is_keyframe:
             r.total_keyframes = keyframe_count
+
+    # --- Audio enrichment ---
+    transcript_segments: list[TranscriptSegment] | None = None
+    speech_segments: list[TranscriptSegment] | None = None
+
+    if config.video.transcript_path:
+        transcript_segments = parse_transcript(Path(config.video.transcript_path))
+
+    if config.video.audio_detection:
+        try:
+            speech_segments = detect_speech_segments(path)
+        except Exception:
+            speech_segments = None  # Audio extraction may fail for some videos
+
+    for r in results:
+        if not r.is_keyframe or r.video_timestamp is None:
+            continue
+
+        ts = r.video_timestamp
+
+        # Transcript alignment (takes priority for audio_activity too)
+        if transcript_segments:
+            r.transcript_segment = align_transcript(ts, transcript_segments)
+            r.audio_activity = "speech" if r.transcript_segment else "silence"
+        elif speech_segments is not None:
+            r.audio_activity = get_audio_activity(ts, speech_segments)
+        elif config.video.audio_detection:
+            # Audio extraction failed; default to silence so the field is populated
+            r.audio_activity = "silence"
 
     final_pipeline.finalize()
     return results
