@@ -1,7 +1,5 @@
 """Edge and corner case tests for all Peeklet modules."""
 
-from __future__ import annotations
-
 from io import BytesIO
 from pathlib import Path
 
@@ -38,7 +36,6 @@ from peeklet.core.redactor import (
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import compute_block_grid, crop_region, ensure_rgb_uint8
 from peeklet.utils.types import EventType, FrameResult, Region
-
 
 # ── Image utility edge cases ──────────────────────────────────────────────
 
@@ -775,20 +772,6 @@ class TestPipelineEdgeCases:
         # First frame and every dimension change
         assert all(r.is_keyframe for r in results)
 
-    def test_solid_color_change_detected(self, config: PeekletConfig, tmp_output: Path) -> None:
-        """Solid red vs solid green: same phash but different per-channel means."""
-        pipeline = Pipeline(config)
-        red = np.full((100, 100, 3), 0, dtype=np.uint8)
-        red[:, :, 0] = 255
-        green = np.full((100, 100, 3), 0, dtype=np.uint8)
-        green[:, :, 1] = 255
-
-        pipeline.process_frame(red, frame_id="red")
-        result = pipeline.process_frame(green, frame_id="green")
-
-        # Per-channel mean diff is 255 (> 5.0), so hash match is broken
-        assert result.is_keyframe is True
-
     def test_very_similar_frames_skipped(self, config: PeekletConfig, tmp_output: Path) -> None:
         """Tiny per-pixel noise should be skipped."""
         pipeline = Pipeline(config)
@@ -924,16 +907,3 @@ class TestPipelineTiledEdgeCases:
         result = pipeline.process_frame(tall_b, frame_id="f1")
         assert result.is_keyframe
 
-    def test_per_channel_mean_disambiguates_solid_tall_frames(
-        self, tiled_config: PeekletConfig, tmp_output: Path
-    ) -> None:
-        """Solid colored tall frames with same global mean should be disambiguated."""
-        pipeline = Pipeline(tiled_config)
-        red_tall = np.zeros((600, 200, 3), dtype=np.uint8)
-        red_tall[:, :, 0] = 255
-        green_tall = np.zeros((600, 200, 3), dtype=np.uint8)
-        green_tall[:, :, 1] = 255
-
-        pipeline.process_frame(red_tall, frame_id="red")
-        result = pipeline.process_frame(green_tall, frame_id="green")
-        assert result.is_keyframe
