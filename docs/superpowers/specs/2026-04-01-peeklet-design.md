@@ -22,6 +22,22 @@ A Python library + CLI that runs a cascade of increasingly expensive operations 
 2. SSIM + block-level diff — kills minor noise
 3. PII redaction (most expensive) — only runs on confirmed keyframes
 
+### Use Cases
+
+**1. Data preprocessing for AI agent training**
+Peeklet is not an agent trainer, but it's the data quality layer that makes agent training feasible at scale. Raw screen captures → Peeklet filters keyframes and redacts PII → enrichment layer adds OCR/action labels → clean (screenshot, action, target_element) training tuples. Without this step, you're feeding millions of near-identical, PII-laden frames into expensive enrichment pipelines.
+
+**Important nuance for action-prediction agents:** Agents that learn to predict the next click need cursor movement and position as signal — deduplicating "cursor-only" frames would discard training data. For this use case, Peeklet should run in a **high-sensitivity mode** with low thresholds (preserving most frames) and primarily serve as a PII redactor + Parquet exporter rather than an aggressive filter. The config supports this: set `comparator.ssim_threshold` very low (e.g., 0.3) and `masking.noise_threshold` high (e.g., 0.95) to retain cursor-movement frames while still filtering true duplicates (identical frames) and masking only genuinely noisy regions like playing video.
+
+**2. Workflow analysis / process mining**
+Tools like Fluency capture screenshots to understand how employees work. Peeklet reduces millions of daily captures to the meaningful state transitions, producing a structured Parquet manifest that workflow analysis systems can query directly via DuckDB.
+
+**3. Cost optimization for screenshot pipelines**
+Any system that captures screenshots periodically (RPA recording, session replay, monitoring) can use Peeklet as a filter to reduce downstream OCR/LLM/storage costs by 80-90%.
+
+**4. Privacy-safe screen data handling**
+The PII redaction layer ensures sensitive information (emails, SSNs, credit cards) is scrubbed from keyframes before they're stored or processed downstream, enabling compliant data pipelines.
+
 ## Architecture
 
 ### Project Structure
