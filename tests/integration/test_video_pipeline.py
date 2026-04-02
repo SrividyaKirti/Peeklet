@@ -55,16 +55,20 @@ class TestVideoEndToEnd:
         table = pq.read_table(manifest_path)
 
         # Verify video-specific columns exist
-        for col in ["source_video", "video_timestamp", "video_frame_number",
-                     "keyframe_index", "total_keyframes", "video_duration",
-                     "change_magnitude"]:
+        for col in [
+            "source_video",
+            "video_timestamp",
+            "video_frame_number",
+            "keyframe_index",
+            "total_keyframes",
+            "video_duration",
+            "change_magnitude",
+        ]:
             assert col in table.column_names
 
         # Verify keyframe rows have video metadata populated
         row = table.to_pydict()
-        keyframe_indices = [
-            i for i, is_kf in enumerate(row["is_keyframe"]) if is_kf
-        ]
+        keyframe_indices = [i for i, is_kf in enumerate(row["is_keyframe"]) if is_kf]
 
         for idx in keyframe_indices:
             assert row["source_video"][idx] == "demo.mp4"
@@ -82,10 +86,7 @@ class TestVideoEndToEnd:
 
     def test_video_with_transcript(self, tmp_path: Path) -> None:
         """Video + transcript -> keyframes with transcript_segment populated."""
-        frames = (
-            [_solid_frame((0, 0, 0))] * 60
-            + [_solid_frame((255, 255, 255))] * 60
-        )
+        frames = [_solid_frame((0, 0, 0))] * 60 + [_solid_frame((255, 255, 255))] * 60
         video_path = _make_test_video(tmp_path / "demo.mp4", frames, fps=30)
 
         srt_path = tmp_path / "transcript.srt"

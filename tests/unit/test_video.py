@@ -81,10 +81,7 @@ class TestCoarseExtraction:
 class TestSmartSampling:
     def test_backfill_finds_transition(self, tmp_path: Path) -> None:
         # 3 seconds: 1.5s black, then 1.5s white (sharp transition at frame 45)
-        frames = (
-            [_solid_frame((0, 0, 0))] * 45
-            + [_solid_frame((255, 255, 255))] * 45
-        )
+        frames = [_solid_frame((0, 0, 0))] * 45 + [_solid_frame((255, 255, 255))] * 45
         video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
@@ -117,10 +114,7 @@ class TestSmartSampling:
         assert len(keyframes) == 1
 
     def test_results_have_video_metadata(self, tmp_path: Path) -> None:
-        frames = (
-            [_solid_frame((255, 0, 0))] * 30
-            + [_solid_frame((0, 255, 0))] * 30
-        )
+        frames = [_solid_frame((255, 0, 0))] * 30 + [_solid_frame((0, 255, 0))] * 30
         video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
@@ -138,10 +132,7 @@ class TestSmartSampling:
             assert kf.change_magnitude is not None
 
     def test_time_since_prev_keyframe(self, tmp_path: Path) -> None:
-        frames = (
-            [_solid_frame((255, 0, 0))] * 30
-            + [_solid_frame((0, 255, 0))] * 30
-        )
+        frames = [_solid_frame((255, 0, 0))] * 30 + [_solid_frame((0, 255, 0))] * 30
         video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
@@ -159,10 +150,7 @@ class TestSmartSampling:
 
 class TestAudioEnrichment:
     def test_audio_activity_populated_when_enabled(self, tmp_path: Path) -> None:
-        frames = (
-            [_solid_frame((0, 0, 0))] * 30
-            + [_solid_frame((255, 255, 255))] * 30
-        )
+        frames = [_solid_frame((0, 0, 0))] * 30 + [_solid_frame((255, 255, 255))] * 30
         video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
@@ -188,10 +176,7 @@ class TestAudioEnrichment:
             assert kf.audio_activity is None
 
     def test_transcript_alignment(self, tmp_path: Path) -> None:
-        frames = (
-            [_solid_frame((0, 0, 0))] * 60
-            + [_solid_frame((255, 255, 255))] * 60
-        )
+        frames = [_solid_frame((0, 0, 0))] * 60 + [_solid_frame((255, 255, 255))] * 60
         video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
 
         srt_path = tmp_path / "transcript.srt"

@@ -52,9 +52,7 @@ def compute_phash_tiled(
     return hashes
 
 
-def tiled_hashes_match(
-    hashes_a: list[str], hashes_b: list[str], tolerance: int = 0
-) -> bool:
+def tiled_hashes_match(hashes_a: list[str], hashes_b: list[str], tolerance: int = 0) -> bool:
     """Check if all corresponding tile hashes match.
 
     Returns False if tile counts differ or any tile pair exceeds tolerance.
@@ -62,6 +60,5 @@ def tiled_hashes_match(
     if len(hashes_a) != len(hashes_b):
         return False
     return all(
-        hashes_match(ha, hb, tolerance=tolerance)
-        for ha, hb in zip(hashes_a, hashes_b, strict=True)
+        hashes_match(ha, hb, tolerance=tolerance) for ha, hb in zip(hashes_a, hashes_b, strict=True)
     )

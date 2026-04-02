@@ -42,9 +42,7 @@ def _parse_timestamp(ts: str) -> float:
     return hours * 3600 + minutes * 60 + seconds
 
 
-_TIMESTAMP_RE = re.compile(
-    r"(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})"
-)
+_TIMESTAMP_RE = re.compile(r"(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})")
 
 
 def _parse_srt(text: str) -> list[TranscriptSegment]:
@@ -162,15 +160,10 @@ def detect_speech_segments(
     if current_start is not None:
         speech_ranges.append((current_start, duration_s))
 
-    return [
-        TranscriptSegment(start=s, end=e, text="[speech]")
-        for s, e in speech_ranges
-    ]
+    return [TranscriptSegment(start=s, end=e, text="[speech]") for s, e in speech_ranges]
 
 
-def get_audio_activity(
-    timestamp: float, speech_segments: list[TranscriptSegment]
-) -> str:
+def get_audio_activity(timestamp: float, speech_segments: list[TranscriptSegment]) -> str:
     """Return 'speech' or 'silence' for a given timestamp."""
     for seg in speech_segments:
         if seg.start <= timestamp <= seg.end:

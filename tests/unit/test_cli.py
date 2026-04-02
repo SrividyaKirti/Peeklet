@@ -12,6 +12,7 @@ from peeklet.cli import main
 
 try:
     import av  # noqa: F401
+
     _has_video_deps = True
 except ImportError:
     _has_video_deps = False
@@ -91,11 +92,16 @@ class TestVideoCliDetection:
                 out.write_frame(f)
 
         runner = CliRunner()
-        result = runner.invoke(main, [
-            "--input", str(video_path),
-            "--output", str(tmp_path / "output"),
-            "--no-redact",
-        ])
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(video_path),
+                "--output",
+                str(tmp_path / "output"),
+                "--no-redact",
+            ],
+        )
         assert result.exit_code == 0
         assert "keyframe" in result.output.lower()
 
@@ -112,11 +118,16 @@ class TestVideoCliDetection:
                     out.write_frame(f)
 
         runner = CliRunner()
-        result = runner.invoke(main, [
-            "--input", str(tmp_path),
-            "--output", str(tmp_path / "output"),
-            "--no-redact",
-        ])
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "output"),
+                "--no-redact",
+            ],
+        )
         assert result.exit_code == 0
 
     def test_mixed_directory_without_mode_errors(self, tmp_path: Path) -> None:
@@ -134,10 +145,15 @@ class TestVideoCliDetection:
         img.save(tmp_path / "shot.png")
 
         runner = CliRunner()
-        result = runner.invoke(main, [
-            "--input", str(tmp_path),
-            "--output", str(tmp_path / "output"),
-        ])
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "output"),
+            ],
+        )
         assert result.exit_code != 0
         assert "--mode" in result.output
 
@@ -156,12 +172,18 @@ class TestVideoCliDetection:
         img.save(tmp_path / "shot.png")
 
         runner = CliRunner()
-        result = runner.invoke(main, [
-            "--input", str(tmp_path),
-            "--output", str(tmp_path / "output"),
-            "--mode", "video",
-            "--no-redact",
-        ])
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "output"),
+                "--mode",
+                "video",
+                "--no-redact",
+            ],
+        )
         assert result.exit_code == 0
 
     def test_transcript_flag(self, tmp_path: Path) -> None:
@@ -179,10 +201,16 @@ class TestVideoCliDetection:
         srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n")
 
         runner = CliRunner()
-        result = runner.invoke(main, [
-            "--input", str(video_path),
-            "--output", str(tmp_path / "output"),
-            "--no-redact",
-            "--transcript", str(srt_path),
-        ])
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(video_path),
+                "--output",
+                str(tmp_path / "output"),
+                "--no-redact",
+                "--transcript",
+                str(srt_path),
+            ],
+        )
         assert result.exit_code == 0

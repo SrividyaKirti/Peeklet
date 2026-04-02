@@ -14,9 +14,7 @@ from peeklet.pipeline import Pipeline
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 
-def _detect_mode(
-    input_path: Path, mode: str | None, image_extensions: set[str]
-) -> str:
+def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str]) -> str:
     """Detect whether input is video or image mode."""
     if input_path.is_file():
         if input_path.suffix.lower() in VIDEO_EXTENSIONS:
@@ -25,12 +23,10 @@ def _detect_mode(
 
     # Directory — scan contents
     has_videos = any(
-        f.suffix.lower() in VIDEO_EXTENSIONS
-        for f in input_path.iterdir() if f.is_file()
+        f.suffix.lower() in VIDEO_EXTENSIONS for f in input_path.iterdir() if f.is_file()
     )
     has_images = any(
-        f.suffix.lower() in image_extensions
-        for f in input_path.iterdir() if f.is_file()
+        f.suffix.lower() in image_extensions for f in input_path.iterdir() if f.is_file()
     )
 
     if mode:
@@ -126,8 +122,7 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
         video_files = [input_path]
     else:
         video_files = sorted(
-            f for f in input_path.iterdir()
-            if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+            f for f in input_path.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
         )
 
     if not video_files:
@@ -154,8 +149,7 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
 
     output_dir = Path(config.exporter.output_dir)
     click.echo(
-        f"Done: {total_keyframes} total keyframes. "
-        f"Manifest: {output_dir / 'manifest.parquet'}"
+        f"Done: {total_keyframes} total keyframes. Manifest: {output_dir / 'manifest.parquet'}"
     )
 
 
@@ -166,10 +160,7 @@ def _run_image_mode(
 ) -> None:
     """Process image directory (existing behavior)."""
     pipeline = Pipeline(config)
-    files = sorted(
-        f for f in input_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in extensions
-    )
+    files = sorted(f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in extensions)
 
     if not files:
         click.echo(f"No supported images found in {input_dir}")
@@ -180,9 +171,7 @@ def _run_image_mode(
     keyframe_count = 0
     for f in files:
         frame = load_frame(f)
-        result = pipeline.process_frame(
-            frame, frame_id=f.stem, source_format=f.suffix.lstrip(".")
-        )
+        result = pipeline.process_frame(frame, frame_id=f.stem, source_format=f.suffix.lstrip("."))
         if result.is_keyframe:
             keyframe_count += 1
 

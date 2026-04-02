@@ -8,6 +8,7 @@ from peeklet.core.audio import TranscriptSegment, align_transcript, parse_transc
 
 try:
     import pydub  # noqa: F401
+
     _has_pydub = True
 except ImportError:
     _has_pydub = False
@@ -33,13 +34,7 @@ class TestParseSrt:
 
     def test_parse_multiline_srt(self, tmp_path: Path) -> None:
         srt_file = tmp_path / "test.srt"
-        srt_file.write_text(
-            "1\n"
-            "00:00:01,000 --> 00:00:04,000\n"
-            "Line one\n"
-            "Line two\n"
-            "\n"
-        )
+        srt_file.write_text("1\n00:00:01,000 --> 00:00:04,000\nLine one\nLine two\n\n")
         segments = parse_transcript(srt_file)
         assert len(segments) == 1
         assert segments[0].text == "Line one Line two"
@@ -72,13 +67,7 @@ class TestParseVtt:
     def test_vtt_with_header_metadata(self, tmp_path: Path) -> None:
         vtt_file = tmp_path / "test.vtt"
         vtt_file.write_text(
-            "WEBVTT\n"
-            "Kind: captions\n"
-            "Language: en\n"
-            "\n"
-            "00:00:01.000 --> 00:00:03.000\n"
-            "First line\n"
-            "\n"
+            "WEBVTT\nKind: captions\nLanguage: en\n\n00:00:01.000 --> 00:00:03.000\nFirst line\n\n"
         )
         segments = parse_transcript(vtt_file)
         assert len(segments) == 1
@@ -130,9 +119,7 @@ class TestSpeechSilenceDetection:
         speech_segments = detect_speech_segments(audio_path)
         # Should detect speech roughly in the 1-2 second range
         assert len(speech_segments) >= 1
-        has_speech_in_middle = any(
-            s.start < 2.0 and s.end > 1.0 for s in speech_segments
-        )
+        has_speech_in_middle = any(s.start < 2.0 and s.end > 1.0 for s in speech_segments)
         assert has_speech_in_middle
 
     def test_get_audio_activity_at_timestamp(self, tmp_path: Path) -> None:

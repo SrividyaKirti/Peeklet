@@ -187,7 +187,9 @@ def process_video(
     for frame, ts, frame_num in decoder.extract_coarse_frames(sample_fps):
         frame_id = f"coarse_{frame_num:06d}"
         result = coarse_pipeline.process_frame(
-            frame, frame_id=frame_id, source_format="video",
+            frame,
+            frame_id=frame_id,
+            source_format="video",
         )
         coarse_samples.append((frame, ts, frame_num, result))
 
@@ -212,6 +214,7 @@ def process_video(
     coarse_dir = output_dir / ".coarse_tmp"
     if coarse_dir.exists():
         import shutil
+
         shutil.rmtree(coarse_dir)
 
     # --- Final pass: process frames, enrich metadata, write manifest ---
@@ -226,7 +229,9 @@ def process_video(
     for frame, ts, frame_num in all_frames:
         frame_id = f"frame_{frame_num:06d}"
         result = final_pipeline.process_frame(
-            frame, frame_id=frame_id, source_format="video",
+            frame,
+            frame_id=frame_id,
+            source_format="video",
         )
 
         # Enrich with video metadata
@@ -241,9 +246,7 @@ def process_video(
             # Rename the saved keyframe image to use the step_NNN name
             if result.asset_path:
                 old_path = Path(result.asset_path)
-                new_path = old_path.with_name(
-                    new_frame_id + old_path.suffix
-                )
+                new_path = old_path.with_name(new_frame_id + old_path.suffix)
                 if old_path.exists():
                     old_path.rename(new_path)
                 result.asset_path = str(new_path)
