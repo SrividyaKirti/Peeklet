@@ -109,17 +109,29 @@ class VideoDecoder:
         """Extract all frames in a range [start_frame, end_frame).
 
         Used for backfill around detected transitions.
+        Seeks to the nearest keyframe before start_frame using pyav,
+        avoiding O(n) decode of the entire video prefix.
         """
-        import imageio.v3 as iio
+        import av
 
-        for idx, frame in enumerate(iio.imiter(self._path, plugin="pyav")):
+        container = av.open(str(self._path))
+        stream = container.streams.video[0]
+
+        # Seek to a point just before start_frame
+        target_ts = int(start_frame / self._fps * av.time_base)
+        container.seek(target_ts)
+
+        for frame in container.decode(stream):
+            idx = int(frame.pts * stream.time_base * self._fps)
             if idx < start_frame:
                 continue
             if idx >= end_frame:
                 break
             timestamp = idx / self._fps
-            rgb = ensure_rgb_uint8(np.asarray(frame))
+            rgb = ensure_rgb_uint8(np.asarray(frame.to_ndarray(format="rgb24")))
             yield rgb, timestamp, idx
+
+        container.close()
 
 
 def _change_magnitude(result: FrameResult) -> str:

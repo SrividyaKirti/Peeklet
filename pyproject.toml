@@ -86,6 +86,7 @@ module = [
     "pyarrow.*",
     "imagehash.*",
     "skimage.*",
+    "av.*",
     "imageio.*",
     "imageio_ffmpeg.*",
     "pydub.*",
