@@ -65,7 +65,9 @@ def process_all_tasks(output_dir: Path) -> dict:
                 app_name=meta.get("website", ""),
                 window_title=meta.get("confirmed_task", ""),
             )
-            action = meta["actions"][i] if i < len(meta["actions"]) else None
+            # Shift action labels: frame N shows action N-1 (what caused this state)
+            # Frame 0 has no prior action; frame 1 shows action 0, etc.
+            prior_action = meta["actions"][i - 1] if i > 0 and (i - 1) < len(meta["actions"]) else None
 
             task_results.append({
                 "frame_id": result.frame_id,
@@ -84,7 +86,9 @@ def process_all_tasks(output_dir: Path) -> dict:
                     if result.adaptive_mask else None
                 ),
                 "asset_path": result.asset_path,
-                "action": action,
+                "visual_reason": result.visual_reason,
+                "prev_keyframe_id": result.prev_keyframe_id,
+                "action": prior_action,
                 "source_image": str(img_path.name),
             })
 

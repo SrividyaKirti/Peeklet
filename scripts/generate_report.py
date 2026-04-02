@@ -214,6 +214,15 @@ body {{
     border-radius: 4px;
     font-size: 12px;
 }}
+.visual-reason {{
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border-left: 3px solid var(--accent-green);
+    border-radius: 0 4px 4px 0;
+    font-size: 12px;
+    color: var(--accent-green);
+}}
 .image-compare {{
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -302,8 +311,10 @@ function renderFrame(frame, index, task) {{
     const isKF = frame.is_keyframe;
     const openByDefault = isKF;
     const ssimStr = frame.ssim_score !== null ? frame.ssim_score.toFixed(4) : 'N/A (hash match)';
+    // action is already shifted: frame.action = action N-1 (what caused this visual state)
     const actionStr = frame.action ? frame.action.target_action_reprs || '' : '';
     const opStr = frame.action && frame.action.operation ? frame.action.operation.op || '' : '';
+    const reasonStr = frame.visual_reason || '';
 
     let imageSection = '';
     if (frame.source_image_path) {{
@@ -326,18 +337,20 @@ function renderFrame(frame, index, task) {{
                 <strong>${{frame.frame_id}}</strong>
                 <span class="frame-meta-inline">
                     SSIM: ${{ssimStr}}
-                    ${{opStr ? '&middot; ' + opStr : ''}}
+                    ${{opStr ? '&middot; Prior action: ' + opStr : ''}}
                 </span>
             </div>
             <div class="frame-detail ${{openByDefault ? 'open' : ''}}">
+                ${{reasonStr ? `<div class="visual-reason">${{reasonStr}}</div>` : ''}}
+                ${{actionStr ? `<div class="action-repr"><strong>Caused by:</strong> ${{actionStr}}</div>` : ''}}
                 ${{imageSection}}
                 <div class="frame-props">
                     <div><span class="prop-label">Hash:</span> <span class="prop-value">${{frame.perceptual_hash}}</span></div>
                     <div><span class="prop-label">SSIM:</span> <span class="prop-value">${{ssimStr}}</span></div>
                     <div><span class="prop-label">Change %:</span> <span class="prop-value">${{frame.changed_pct !== null ? frame.changed_pct.toFixed(1) + '%' : 'N/A'}}</span></div>
                     <div><span class="prop-label">Mask Regions:</span> <span class="prop-value">${{frame.adaptive_mask ? frame.adaptive_mask.length : 0}}</span></div>
+                    ${{frame.prev_keyframe_id ? `<div><span class="prop-label">Prev Keyframe:</span> <span class="prop-value">${{frame.prev_keyframe_id}}</span></div>` : ''}}
                 </div>
-                ${{actionStr ? `<div class="action-repr"><strong>Action:</strong> ${{actionStr}}</div>` : ''}}
             </div>
         </div>
     `;
