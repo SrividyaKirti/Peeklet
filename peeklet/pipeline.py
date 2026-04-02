@@ -170,11 +170,10 @@ class Pipeline:
             )
 
         # Step 3b: Frame dimension change → automatic KEYFRAME
-        dims_changed = (
+        if (
             self._last_keyframe is not None
             and masked_frame.shape[:2] != self._last_keyframe.shape[:2]
-        )
-        if dims_changed:
+        ):
             prev_h, prev_w = self._last_keyframe.shape[:2]
             return self._make_keyframe(
                 frame,
