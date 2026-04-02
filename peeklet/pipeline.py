@@ -50,11 +50,11 @@ class Pipeline:
         # Rolling state
         self._last_keyframe: np.ndarray | None = None  # masked version for SSIM comparison
         self._last_hash: str | None = None
-        self._last_mean: float | None = None  # mean pixel value for uniform-frame disambiguation
+        self._last_mean: tuple[float, float, float] | None = None  # per-channel means
         self._last_keyframe_id: str | None = None
         self._last_keyframe_path: str | None = None
         self._last_tiled_hashes: list[str] | None = None
-        self._last_tile_means: list[float] | None = None
+        self._last_tile_means: list[tuple[float, float, float]] | None = None
 
         # Build redaction pattern set (if redactor enabled)
         custom_patterns: list = []
@@ -74,7 +74,7 @@ class Pipeline:
         masked_frame: np.ndarray,
         frame_id: str,
         current_hash: str,
-        current_mean: float,
+        current_mean: tuple[float, float, float],
         visual_reason: str,
         mask_regions: list,
         timestamp: datetime | None = None,
@@ -160,10 +160,15 @@ class Pipeline:
                 tile_height=tile_height,
             )
             current_hash = current_hashes[0]  # first tile hash as representative
-            # Per-tile means for fine-grained disambiguation on uniform-background tiles
+            # Per-tile per-channel means for fine-grained disambiguation
             n_tiles = max(1, math.ceil(h / tile_height))
             current_tile_means = [
-                float(masked_frame[i * tile_height : min((i + 1) * tile_height, h)].mean())
+                tuple(
+                    float(
+                        masked_frame[i * tile_height : min((i + 1) * tile_height, h), :, c].mean()
+                    )
+                    for c in range(3)
+                )
                 for i in range(n_tiles)
             ]
         else:
@@ -171,8 +176,9 @@ class Pipeline:
             current_tile_means = None
             current_hash = compute_phash(masked_frame, hash_size=self._config.hasher.hash_size)
 
-        # Compute mean pixel value (used to disambiguate uniform frames with identical phash)
-        current_mean = float(masked_frame.mean())
+        # Per-channel means to disambiguate uniform frames with identical phash
+        # (e.g. solid red vs solid green have the same global mean but differ per-channel)
+        current_mean = tuple(float(masked_frame[:, :, c].mean()) for c in range(3))
 
         # Step 3: First frame is always a keyframe
         if self._last_hash is None:
@@ -215,7 +221,10 @@ class Pipeline:
             )
 
         # Step 4: Hash comparison — tiled or single
-        mean_diff = abs(current_mean - self._last_mean)  # type: ignore[operator]
+        mean_diff = max(
+            abs(a - b)
+            for a, b in zip(current_mean, self._last_mean, strict=True)  # type: ignore[union-attr]
+        )
         if is_tall and current_hashes is not None and self._last_tiled_hashes is not None:
             # For tiled images, check per-tile mean diffs so localized changes aren't swallowed
             # by a small global mean diff
@@ -225,7 +234,7 @@ class Pipeline:
                 and len(current_tile_means) == len(self._last_tile_means)
             ):
                 max_tile_mean_diff = max(
-                    abs(cm - lm)
+                    max(abs(a - b) for a, b in zip(cm, lm, strict=True))
                     for cm, lm in zip(current_tile_means, self._last_tile_means, strict=True)
                 )
             else:
