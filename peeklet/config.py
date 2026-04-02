@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -37,6 +37,7 @@ class HasherConfig(BaseModel):
 
     algorithm: Literal["phash"] = "phash"
     hash_size: int = Field(default=8, gt=0)
+    tile_aspect_ratio: float = Field(default=1.5, gt=0.0)
 
 
 class ComparatorConfig(BaseModel):
@@ -44,13 +45,14 @@ class ComparatorConfig(BaseModel):
 
     ssim_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     min_changed_pct: float = Field(default=2.0, ge=0.0)
+    min_changed_blocks: int = Field(default=3, ge=0)
 
 
 class RedactorConfig(BaseModel):
     """PII redaction settings."""
 
     enabled: bool = True
-    pii_types: list[str] = Field(
+    pii_types: List[str] = Field(
         default_factory=lambda: [
             "email",
             "phone",
@@ -60,7 +62,7 @@ class RedactorConfig(BaseModel):
             "address",
         ]
     )
-    custom_patterns_file: str | None = None
+    custom_patterns_file: Optional[str] = None
 
 
 class ExporterConfig(BaseModel):
@@ -74,7 +76,7 @@ class ExporterConfig(BaseModel):
 class InputConfig(BaseModel):
     """Input settings."""
 
-    supported_formats: list[str] = Field(
+    supported_formats: List[str] = Field(
         default_factory=lambda: ["png", "jpg", "jpeg", "bmp", "tiff", "webp", "pdf"]
     )
     sort_by: Literal["filename", "timestamp"] = "filename"

@@ -8,6 +8,7 @@ import yaml
 
 from peeklet.config import (
     ComparatorConfig,
+    HasherConfig,
     MaskingConfig,
     PeekletConfig,
     PipelineConfig,
@@ -34,6 +35,14 @@ class TestDefaults:
         assert config.mode == "batch"
         assert config.concurrency == 4
 
+    def test_default_tile_aspect_ratio(self) -> None:
+        config = PeekletConfig()
+        assert config.hasher.tile_aspect_ratio == 1.5
+
+    def test_default_min_changed_blocks(self) -> None:
+        config = PeekletConfig()
+        assert config.comparator.min_changed_blocks == 3
+
 
 class TestValidation:
     def test_reject_invalid_mode(self) -> None:
@@ -55,6 +64,14 @@ class TestValidation:
     def test_reject_noise_threshold_out_of_range(self) -> None:
         with pytest.raises(ValueError):
             MaskingConfig(noise_threshold=1.5)
+
+    def test_reject_negative_tile_aspect_ratio(self) -> None:
+        with pytest.raises(ValueError):
+            HasherConfig(tile_aspect_ratio=-1.0)
+
+    def test_reject_negative_min_changed_blocks(self) -> None:
+        with pytest.raises(ValueError):
+            ComparatorConfig(min_changed_blocks=-1)
 
 
 class TestLoadConfig:
