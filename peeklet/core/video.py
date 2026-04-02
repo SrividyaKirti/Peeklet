@@ -14,6 +14,7 @@ from peeklet.core.audio import (
     get_audio_activity,
     parse_transcript,
 )
+from peeklet.core.exporter import ManifestWriter
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
 
@@ -133,21 +134,42 @@ def _change_magnitude(result: FrameResult) -> str:
     return "minor"
 
 
-def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
+def process_video(
+    path: Path,
+    config: PeekletConfig,
+    writer: ManifestWriter | None = None,
+) -> list[FrameResult]:
     """Process a video file through smart sampling + Peeklet pipeline.
 
     Two-pass strategy:
     1. Coarse pass at config.video.sample_fps
     2. Backfill around SKIP->KEYFRAME transitions at native fps
 
-    Returns list of FrameResult for keyframes only.
+    Args:
+        path: Path to video file.
+        config: Peeklet configuration.
+        writer: Optional shared ManifestWriter for multi-video processing.
+            If None, a new writer is created and flushed automatically.
+
+    Returns list of FrameResult for all processed frames.
     """
     decoder = VideoDecoder(path)
     meta = decoder.get_metadata()
     sample_fps = config.video.sample_fps
+    output_dir = Path(config.exporter.output_dir)
+
+    owns_writer = writer is None
+    if writer is None:
+        writer = ManifestWriter(
+            path=output_dir / "manifest.parquet",
+            compression=config.exporter.parquet_compression,
+        )
 
     # --- Pass 1: Coarse sampling to find transitions ---
-    coarse_pipeline = Pipeline(config)
+    # Use a throwaway pipeline (writes to /dev/null) just for keyframe decisions
+    coarse_config = config.model_copy(deep=True)
+    coarse_config.exporter.output_dir = str(output_dir / ".coarse_tmp")
+    coarse_pipeline = Pipeline(coarse_config)
     coarse_samples: list[tuple[np.ndarray, float, int, FrameResult]] = []
 
     for frame, ts, frame_num in decoder.extract_coarse_frames(sample_fps):
@@ -165,6 +187,8 @@ def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
             prev_result = coarse_samples[i - 1][3]
             prev_frame_num = coarse_samples[i - 1][2]
             # SKIP -> KEYFRAME: backfill the gap at native fps
+            # Note: extract_frame_range iterates from frame 0. For long videos,
+            # consider using pyav seeking for better performance.
             if not prev_result.is_keyframe and result.is_keyframe:
                 for bf_frame, bf_ts, bf_num in decoder.extract_frame_range(
                     prev_frame_num + 1, frame_num
@@ -172,8 +196,17 @@ def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
                     all_frames.append((bf_frame, bf_ts, bf_num))
         all_frames.append((frame, ts, frame_num))
 
-    # --- Final pass: process all frames in order ---
-    final_pipeline = Pipeline(config)
+    # Clean up coarse pass artifacts
+    coarse_dir = output_dir / ".coarse_tmp"
+    if coarse_dir.exists():
+        import shutil
+        shutil.rmtree(coarse_dir)
+
+    # --- Final pass: process frames, enrich metadata, write manifest ---
+    # Use a pipeline that writes keyframe images but NOT the manifest
+    # (we manage the manifest ourselves for correct enrichment ordering)
+    final_config = config.model_copy(deep=True)
+    final_pipeline = Pipeline(final_config)
     results: list[FrameResult] = []
     keyframe_count = 0
     prev_keyframe_ts: float | None = None
@@ -242,15 +275,13 @@ def process_video(path: Path, config: PeekletConfig) -> list[FrameResult]:
         elif speech_segments is not None:
             r.audio_activity = get_audio_activity(ts, speech_segments)
         elif config.video.audio_detection:
-            # Audio extraction failed; default to silence so the field is populated
             r.audio_activity = "silence"
 
-    # Re-write manifest with fully enriched results (video metadata was set
-    # after process_frame() already called writer.append(), so we must
-    # clear and re-append the enriched rows before flushing).
-    final_pipeline._writer.clear()
+    # Write fully-enriched results to the manifest
     for r in results:
-        final_pipeline._writer.append(r)
+        writer.append(r)
 
-    final_pipeline.finalize()
+    if owns_writer:
+        writer.flush()
+
     return results

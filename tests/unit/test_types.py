@@ -128,7 +128,7 @@ class TestFrameResultVideoFields:
             keyframe_index=3,
             total_keyframes=42,
             video_duration=120.0,
-            change_magnitude="high",
+            change_magnitude="major",
         )
         assert result.source_video == "/path/to/video.mp4"
         assert result.video_timestamp == 12.5
@@ -139,4 +139,4 @@ class TestFrameResultVideoFields:
         assert result.keyframe_index == 3
         assert result.total_keyframes == 42
         assert result.video_duration == 120.0
-        assert result.change_magnitude == "high"
+        assert result.change_magnitude == "major"

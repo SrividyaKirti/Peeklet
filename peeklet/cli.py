@@ -119,6 +119,7 @@ def main(
 
 def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> None:
     """Process video file(s)."""
+    from peeklet.core.exporter import ManifestWriter
     from peeklet.core.video import process_video
 
     if input_path.is_file():
@@ -135,13 +136,21 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
 
     click.echo(f"Processing {len(video_files)} video(s)")
 
+    output_dir = Path(config.exporter.output_dir)
+    writer = ManifestWriter(
+        path=output_dir / "manifest.parquet",
+        compression=config.exporter.parquet_compression,
+    )
+
     total_keyframes = 0
     for vf in video_files:
         click.echo(f"  Processing: {vf.name}")
-        results = process_video(vf, config)
+        results = process_video(vf, config, writer=writer)
         kf_count = sum(1 for r in results if r.is_keyframe)
         total_keyframes += kf_count
         click.echo(f"    {kf_count} keyframes extracted")
+
+    writer.flush()
 
     output_dir = Path(config.exporter.output_dir)
     click.echo(
