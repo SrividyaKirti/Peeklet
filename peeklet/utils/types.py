@@ -66,3 +66,6 @@ class FrameResult:
     source_format: str | None = None
     asset_path: str | None = None
     pii_detected: bool | None = None
+    visual_reason: str | None = None
+    prev_keyframe_id: str | None = None
+    prev_keyframe_path: str | None = None

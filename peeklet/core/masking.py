@@ -30,8 +30,9 @@ class AdaptiveMask:
             return frame.copy(), []
 
         current_blocks = self._compute_block_means(frame, rows, cols)
-        if self._prev_blocks is None:
+        if self._prev_blocks is None or current_blocks.shape != self._prev_blocks.shape:
             self._prev_blocks = current_blocks
+            self._change_history.clear()
             return frame.copy(), []
 
         change_map = np.abs(current_blocks - self._prev_blocks).mean(axis=-1) > 5.0

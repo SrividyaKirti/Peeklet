@@ -46,6 +46,10 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.8",
 ]
+datasets = [
+    "datasets>=2.14",
+    "huggingface-hub>=0.17",
+]
 
 [project.scripts]
 peeklet = "peeklet.cli:main"
@@ -85,6 +89,7 @@ disallow_untyped_calls = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "datasets: tests requiring downloaded datasets (deselect with '-m not datasets')",
     "mind2web: tests requiring Mind2Web dataset (deselect with '-m not mind2web')",
     "showui: tests requiring ShowUI dataset (deselect with '-m not showui')",
     "webui: tests requiring WebUI dataset (deselect with '-m not webui')",

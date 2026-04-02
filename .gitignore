@@ -31,6 +31,7 @@ htmlcov/
 tests/datasets/data/
 tests/synthetic/output/
 output/
+results/
 
 # Superpowers
 .superpowers/

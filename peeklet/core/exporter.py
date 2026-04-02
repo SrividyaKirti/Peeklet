@@ -59,6 +59,9 @@ MANIFEST_SCHEMA = pa.schema(
         pa.field("source_format", pa.string(), nullable=True),
         pa.field("asset_path", pa.string(), nullable=True),
         pa.field("pii_detected", pa.bool_(), nullable=True),
+        pa.field("visual_reason", pa.string(), nullable=True),
+        pa.field("prev_keyframe_id", pa.string(), nullable=True),
+        pa.field("prev_keyframe_path", pa.string(), nullable=True),
     ]
 )
 
@@ -103,6 +106,9 @@ class ManifestWriter:
                 "source_format": result.source_format,
                 "asset_path": result.asset_path,
                 "pii_detected": result.pii_detected,
+                "visual_reason": result.visual_reason,
+                "prev_keyframe_id": result.prev_keyframe_id,
+                "prev_keyframe_path": result.prev_keyframe_path,
             }
         )
 

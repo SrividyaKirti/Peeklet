@@ -79,7 +79,7 @@ def find_pii_in_text(text: str, patterns: list[PiiPattern]) -> list[PiiMatch]:
 
 
 def redact_regions(frame: np.ndarray, regions: list[Region]) -> np.ndarray:
-    redacted = frame.copy()
+    redacted: np.ndarray = frame.copy()
     h, w = redacted.shape[:2]
     for region in regions:
         x1 = max(0, region.x)
