@@ -105,3 +105,80 @@ class TestManifestWriter:
 
         meta = pq.read_metadata(tmp_output / "manifest.parquet")
         assert meta.row_group(0).column(0).compression == "SNAPPY"
+
+
+class TestManifestVideoColumns:
+    def test_video_columns_in_manifest(self, tmp_output: Path) -> None:
+        writer = ManifestWriter(tmp_output / "manifest.parquet")
+        result = FrameResult(
+            frame_id="frame_v001",
+            event_type=EventType.KEYFRAME,
+            is_keyframe=True,
+            perceptual_hash="abcd1234abcd1234",
+            frame_width=1920,
+            frame_height=1080,
+            source_video="recording.mp4",
+            video_timestamp=12.5,
+            video_frame_number=375,
+            time_since_prev_keyframe=3.2,
+            audio_activity="speech",
+            transcript_segment="Hello world",
+            keyframe_index=5,
+            total_keyframes=42,
+            video_duration=120.0,
+            change_magnitude="high",
+        )
+        writer.append(result)
+        writer.flush()
+
+        table = pq.read_table(tmp_output / "manifest.parquet")
+        assert table.num_rows == 1
+
+        expected = {
+            "source_video": "recording.mp4",
+            "video_timestamp": 12.5,
+            "video_frame_number": 375,
+            "time_since_prev_keyframe": 3.2,
+            "audio_activity": "speech",
+            "transcript_segment": "Hello world",
+            "keyframe_index": 5,
+            "total_keyframes": 42,
+            "video_duration": 120.0,
+            "change_magnitude": "high",
+        }
+        for col, expected_val in expected.items():
+            assert col in table.column_names, f"Column '{col}' missing from manifest"
+            actual = table.column(col)[0].as_py()
+            assert actual == expected_val, f"Column '{col}': expected {expected_val!r}, got {actual!r}"
+
+    def test_video_columns_null_for_image_frames(self, tmp_output: Path) -> None:
+        writer = ManifestWriter(tmp_output / "manifest.parquet")
+        result = FrameResult(
+            frame_id="frame_img001",
+            event_type=EventType.KEYFRAME,
+            is_keyframe=True,
+            perceptual_hash="abcd1234abcd1234",
+            frame_width=1920,
+            frame_height=1080,
+        )
+        writer.append(result)
+        writer.flush()
+
+        table = pq.read_table(tmp_output / "manifest.parquet")
+        assert table.num_rows == 1
+
+        video_columns = [
+            "source_video",
+            "video_timestamp",
+            "video_frame_number",
+            "time_since_prev_keyframe",
+            "audio_activity",
+            "transcript_segment",
+            "keyframe_index",
+            "total_keyframes",
+            "video_duration",
+            "change_magnitude",
+        ]
+        for col in video_columns:
+            assert col in table.column_names, f"Column '{col}' missing from manifest"
+            assert table.column(col)[0].as_py() is None, f"Column '{col}' should be null for image frames"
