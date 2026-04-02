@@ -164,7 +164,11 @@ class Pipeline:
             )
 
         # Step 3b: Frame dimension change → automatic KEYFRAME
-        if self._last_keyframe is not None and masked_frame.shape[:2] != self._last_keyframe.shape[:2]:
+        dims_changed = (
+            self._last_keyframe is not None
+            and masked_frame.shape[:2] != self._last_keyframe.shape[:2]
+        )
+        if dims_changed:
             prev_h, prev_w = self._last_keyframe.shape[:2]
             return self._make_keyframe(
                 frame, masked_frame, frame_id, current_hash, current_mean,
@@ -222,7 +226,10 @@ class Pipeline:
                 change_score=comparison.change_score,
                 changed_pct=comparison.changed_pct,
                 changed_regions=comparison.changed_regions if comparison.changed_regions else None,
-                visual_reason=f"Minor change — SSIM {comparison.ssim_score:.4f} above threshold {self._config.comparator.ssim_threshold}",
+                visual_reason=(
+                    f"Minor change — SSIM {comparison.ssim_score:.4f}"
+                    f" above threshold {self._config.comparator.ssim_threshold}"
+                ),
                 prev_keyframe_id=self._last_keyframe_id,
                 prev_keyframe_path=self._last_keyframe_path,
             )
@@ -232,7 +239,10 @@ class Pipeline:
         # Step 7: SSIM below threshold → KEYFRAME
         return self._make_keyframe(
             frame, masked_frame, frame_id, current_hash, current_mean,
-            visual_reason=f"Significant change — SSIM {comparison.ssim_score:.4f}, {comparison.changed_pct:.1f}% of blocks changed",
+            visual_reason=(
+                f"Significant change — SSIM {comparison.ssim_score:.4f},"
+                f" {comparison.changed_pct:.1f}% of blocks changed"
+            ),
             mask_regions=mask_regions,
             timestamp=timestamp, app_name=app_name,
             window_title=window_title, source_format=source_format,

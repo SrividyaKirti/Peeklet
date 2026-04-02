@@ -8,7 +8,7 @@ Requires data download: python scripts/setup_test_data.py
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow.parquet as pq
 import pytest
@@ -16,7 +16,9 @@ import pytest
 from peeklet.config import PeekletConfig
 from peeklet.core.loader import load_frame
 from peeklet.pipeline import Pipeline
-from peeklet.utils.types import EventType
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from .conftest import (
     get_task_screenshots,
