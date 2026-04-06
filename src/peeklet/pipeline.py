@@ -11,7 +11,7 @@ from peeklet.core.comparator import compare_frames
 from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.core.hasher import compute_phash, compute_phash_tiled, hashes_match, tiled_hashes_match
 from peeklet.core.masking import AdaptiveMask
-from peeklet.core.redactor import build_pattern_set
+from peeklet.core.redactor import build_pattern_set, detect_and_redact
 from peeklet.utils.types import EventType, FrameResult
 
 if TYPE_CHECKING:
@@ -88,8 +88,17 @@ class Pipeline:
     ) -> FrameResult:
         """Save a keyframe and build the result, updating rolling state."""
         h, w = frame.shape[:2]
+
+        # PII redaction — run on confirmed keyframes only
+        pii_detected: bool | None = None
+        frame_to_save = frame
+        if self._config.redactor.enabled and self._pattern_set:
+            frame_to_save, pii_detected = detect_and_redact(
+                frame, self._pattern_set, changed_regions=changed_regions,
+            )
+
         asset_path = save_keyframe(
-            frame,
+            frame_to_save,
             self._output_dir,
             frame_id,
             fmt=self._config.exporter.keyframe_format,
@@ -111,6 +120,7 @@ class Pipeline:
             changed_pct=changed_pct,
             changed_regions=changed_regions,
             asset_path=str(asset_path),
+            pii_detected=pii_detected,
             visual_reason=visual_reason,
             prev_keyframe_id=self._last_keyframe_id,
             prev_keyframe_path=self._last_keyframe_path,
