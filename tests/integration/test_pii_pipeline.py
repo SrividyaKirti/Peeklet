@@ -59,7 +59,8 @@ class TestPiiPipeline:
         assert result.is_keyframe is True
         assert result.pii_detected is False
 
-    def test_redactor_disabled_skips_ocr(self, tmp_path) -> None:
+    @patch("peeklet.core.redactor.extract_text_regions")
+    def test_redactor_disabled_skips_ocr(self, mock_ocr: MagicMock, tmp_path) -> None:
         """When redactor is disabled, no OCR is called and pii_detected stays None."""
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
@@ -72,3 +73,40 @@ class TestPiiPipeline:
 
         assert result.is_keyframe is True
         assert result.pii_detected is None
+        mock_ocr.assert_not_called()
+
+    @patch("peeklet.core.redactor.extract_text_regions")
+    @patch("peeklet.core.redactor.extract_text_from_regions")
+    def test_subsequent_keyframe_uses_changed_regions_for_ocr(
+        self, mock_ocr_regions: MagicMock, mock_ocr_full: MagicMock, tmp_path
+    ) -> None:
+        """A second keyframe with changed_regions should OCR only those regions."""
+        mock_ocr_full.return_value = []  # no PII on first frame
+        mock_ocr_regions.return_value = [
+            OcrResult(
+                text="user@secret.com",
+                region=Region(x=10, y=10, w=80, h=15),
+                confidence=0.95,
+            ),
+        ]
+
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.redactor.enabled = True
+        config.redactor.pii_types = ["email"]
+
+        pipeline = Pipeline(config)
+
+        # First frame — becomes keyframe, uses full-frame OCR (no changed_regions)
+        frame_a = np.full((100, 200, 3), 200, dtype=np.uint8)
+        pipeline.process_frame(frame_a, frame_id="frame_001")
+        mock_ocr_full.assert_called_once()
+        mock_ocr_regions.assert_not_called()
+
+        # Second frame — significantly different, triggers keyframe with changed_regions
+        frame_b = np.full((100, 200, 3), 50, dtype=np.uint8)
+        result_b = pipeline.process_frame(frame_b, frame_id="frame_002")
+
+        assert result_b.is_keyframe is True
+        assert result_b.pii_detected is True
+        mock_ocr_regions.assert_called_once()
