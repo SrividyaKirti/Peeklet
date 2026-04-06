@@ -94,6 +94,7 @@ module = [
     "imageio.*",
     "imageio_ffmpeg.*",
     "pydub.*",
+    "easyocr.*",
 ]
 ignore_missing_imports = true
 disallow_untyped_calls = false

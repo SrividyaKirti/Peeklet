@@ -95,7 +95,9 @@ class TestDetectAndRedact:
     def test_detects_and_blacks_out_pii(self, mock_ocr: MagicMock) -> None:
         """Full flow: OCR finds email -> regex matches -> region blacked out."""
         mock_ocr.return_value = [
-            OcrResult(text="john@example.com", region=Region(x=10, y=10, w=80, h=15), confidence=0.95),
+            OcrResult(
+                text="john@example.com", region=Region(x=10, y=10, w=80, h=15), confidence=0.95
+            ),
             OcrResult(text="hello world", region=Region(x=10, y=40, w=60, h=15), confidence=0.9),
         ]
 

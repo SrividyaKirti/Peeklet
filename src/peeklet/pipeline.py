@@ -94,7 +94,9 @@ class Pipeline:
         frame_to_save = frame
         if self._config.redactor.enabled and self._pattern_set:
             frame_to_save, pii_detected = detect_and_redact(
-                frame, self._pattern_set, changed_regions=changed_regions,
+                frame,
+                self._pattern_set,
+                changed_regions=changed_regions,
             )
 
         asset_path = save_keyframe(

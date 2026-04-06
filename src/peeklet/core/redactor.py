@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from peeklet.config import PiiPattern
-
 from peeklet.core.ocr import extract_text_from_regions, extract_text_regions
 
 if TYPE_CHECKING:

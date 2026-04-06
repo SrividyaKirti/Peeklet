@@ -37,6 +37,7 @@ class TestPiiPipeline:
 
         # Verify saved image has the region blacked out
         from PIL import Image
+
         saved = np.array(Image.open(result.asset_path))
         assert np.all(saved[10:25, 10:90] == 0)
 

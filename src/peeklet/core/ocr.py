@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from peeklet.utils.types import Region
 
@@ -20,13 +20,17 @@ class OcrResult:
     confidence: float
 
 
-def _get_reader():  # type: ignore[no-untyped-def]
+_reader_cache: Any = None
+
+
+def _get_reader() -> Any:
     """Lazy-load easyocr reader (singleton)."""
+    global _reader_cache  # noqa: PLW0603
     import easyocr  # optional dep — ImportError if not installed
 
-    if not hasattr(_get_reader, "_reader"):
-        _get_reader._reader = easyocr.Reader(["en"], gpu=False, verbose=False)
-    return _get_reader._reader
+    if _reader_cache is None:
+        _reader_cache = easyocr.Reader(["en"], gpu=False, verbose=False)
+    return _reader_cache
 
 
 def _bbox_to_region(bbox: list[list[int]]) -> Region:
