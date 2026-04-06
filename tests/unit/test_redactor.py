@@ -150,7 +150,7 @@ class TestDetectAndRedact:
         redacted, pii_found = detect_and_redact(frame, patterns, changed_regions=changed)
 
         assert pii_found is True
-        mock_ocr_regions.assert_called_once()
+        mock_ocr_regions.assert_called_once_with(frame, changed)
 
     def test_empty_patterns_skips_ocr(self) -> None:
         """When no patterns are configured, skip OCR entirely."""
