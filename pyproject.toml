@@ -100,6 +100,7 @@ disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
     "datasets: tests requiring downloaded datasets (deselect with '-m not datasets')",
     "mind2web: tests requiring Mind2Web dataset (deselect with '-m not mind2web')",

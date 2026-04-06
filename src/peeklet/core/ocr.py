@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from peeklet.utils.types import Region
+
 if TYPE_CHECKING:
     import numpy as np
-
-    from peeklet.utils.types import Region
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +31,6 @@ def _get_reader():  # type: ignore[no-untyped-def]
 
 def _bbox_to_region(bbox: list[list[int]]) -> Region:
     """Convert easyocr bbox ([[x1,y1],[x2,y1],[x2,y2],[x1,y2]]) to Region."""
-    from peeklet.utils.types import Region
-
     xs = [pt[0] for pt in bbox]
     ys = [pt[1] for pt in bbox]
     x1, x2 = min(xs), max(xs)
@@ -79,8 +77,6 @@ def extract_text_from_regions(
     Returns:
         List of OcrResult with coordinates mapped back to full-frame space.
     """
-    from peeklet.utils.types import Region
-
     reader = _get_reader()
     h, w = frame.shape[:2]
     results: list[OcrResult] = []
