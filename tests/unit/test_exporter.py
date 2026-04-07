@@ -45,7 +45,6 @@ class TestManifestWriter:
             frame_width=1920,
             frame_height=1080,
             asset_path="output/frame_001.png",
-            pii_detected=False,
         )
         writer.append(result)
         writer.flush()

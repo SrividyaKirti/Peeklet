@@ -6,18 +6,18 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from peeklet.config import PeekletConfig, load_patterns
 from peeklet.core.comparator import compare_frames
 from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.core.hasher import compute_phash, compute_phash_tiled, hashes_match, tiled_hashes_match
 from peeklet.core.masking import AdaptiveMask
-from peeklet.core.redactor import build_pattern_set, detect_and_redact
 from peeklet.utils.types import EventType, FrameResult
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     import numpy as np
+
+    from peeklet.config import PeekletConfig
 
 
 class Pipeline:
@@ -56,18 +56,6 @@ class Pipeline:
         self._last_tiled_hashes: list[str] | None = None
         self._last_tile_means: list[tuple[float, float, float]] | None = None
 
-        # Build redaction pattern set (if redactor enabled)
-        custom_patterns: list = []
-        if config.redactor.enabled and config.redactor.custom_patterns_file:
-            try:
-                custom_patterns = load_patterns(Path(config.redactor.custom_patterns_file))
-            except FileNotFoundError:
-                custom_patterns = []
-        self._pattern_set = build_pattern_set(
-            pii_types=config.redactor.pii_types if config.redactor.enabled else [],
-            custom_patterns=custom_patterns,
-        )
-
     def _make_keyframe(
         self,
         frame: np.ndarray,
@@ -89,18 +77,8 @@ class Pipeline:
         """Save a keyframe and build the result, updating rolling state."""
         h, w = frame.shape[:2]
 
-        # PII redaction — run on confirmed keyframes only
-        pii_detected: bool | None = None
-        frame_to_save = frame
-        if self._config.redactor.enabled and self._pattern_set:
-            frame_to_save, pii_detected = detect_and_redact(
-                frame,
-                self._pattern_set,
-                changed_regions=changed_regions,
-            )
-
         asset_path = save_keyframe(
-            frame_to_save,
+            frame,
             self._output_dir,
             frame_id,
             fmt=self._config.exporter.keyframe_format,
@@ -122,7 +100,6 @@ class Pipeline:
             changed_pct=changed_pct,
             changed_regions=changed_regions,
             asset_path=str(asset_path),
-            pii_detected=pii_detected,
             visual_reason=visual_reason,
             prev_keyframe_id=self._last_keyframe_id,
             prev_keyframe_path=self._last_keyframe_path,

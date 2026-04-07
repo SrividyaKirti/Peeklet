@@ -66,7 +66,6 @@ class TestFrameResult:
             adaptive_mask=[Region(x=0, y=0, w=32, h=32)],
             frame_width=1920,
             frame_height=1080,
-            pii_detected=False,
         )
         assert result.is_keyframe is True
         assert result.event_type == EventType.KEYFRAME

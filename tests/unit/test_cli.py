@@ -40,7 +40,7 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["--input", str(input_dir), "--output", str(output_dir), "--no-redact"],
+            ["--input", str(input_dir), "--output", str(output_dir)],
         )
         assert result.exit_code == 0
 
@@ -55,9 +55,7 @@ class TestCli:
         _create_test_images(input_dir, count=3)
 
         config_file = tmp_path / "config.json"
-        config_file.write_text(
-            '{"comparator": {"ssim_threshold": 0.5}, "redactor": {"enabled": false}}'
-        )
+        config_file.write_text('{"comparator": {"ssim_threshold": 0.5}}')
 
         runner = CliRunner()
         result = runner.invoke(
@@ -99,7 +97,6 @@ class TestVideoCliDetection:
                 str(video_path),
                 "--output",
                 str(tmp_path / "output"),
-                "--no-redact",
             ],
         )
         assert result.exit_code == 0
@@ -125,7 +122,6 @@ class TestVideoCliDetection:
                 str(tmp_path),
                 "--output",
                 str(tmp_path / "output"),
-                "--no-redact",
             ],
         )
         assert result.exit_code == 0
@@ -181,7 +177,6 @@ class TestVideoCliDetection:
                 str(tmp_path / "output"),
                 "--mode",
                 "video",
-                "--no-redact",
             ],
         )
         assert result.exit_code == 0
@@ -208,7 +203,6 @@ class TestVideoCliDetection:
                 str(video_path),
                 "--output",
                 str(tmp_path / "output"),
-                "--no-redact",
                 "--transcript",
                 str(srt_path),
             ],

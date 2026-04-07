@@ -48,23 +48,6 @@ class ComparatorConfig(BaseModel):
     min_changed_blocks: int = Field(default=3, ge=0)
 
 
-class RedactorConfig(BaseModel):
-    """PII redaction settings."""
-
-    enabled: bool = True
-    pii_types: list[str] = Field(
-        default_factory=lambda: [
-            "email",
-            "phone",
-            "ssn",
-            "credit_card",
-            "ip_address",
-            "address",
-        ]
-    )
-    custom_patterns_file: str | None = None
-
-
 class ExporterConfig(BaseModel):
     """Export settings."""
 
@@ -98,19 +81,9 @@ class PeekletConfig(BaseModel):
     masking: MaskingConfig = Field(default_factory=MaskingConfig)
     hasher: HasherConfig = Field(default_factory=HasherConfig)
     comparator: ComparatorConfig = Field(default_factory=ComparatorConfig)
-    redactor: RedactorConfig = Field(default_factory=RedactorConfig)
     exporter: ExporterConfig = Field(default_factory=ExporterConfig)
     input: InputConfig = Field(default_factory=InputConfig)
     video: VideoConfig = Field(default_factory=VideoConfig)
-
-
-class PiiPattern(BaseModel):
-    """A PII detection pattern."""
-
-    name: str
-    regex: str = ""
-    description: str = ""
-    enabled: bool = True
 
 
 def load_config(path: Path | None) -> PeekletConfig:
@@ -126,14 +99,3 @@ def load_config(path: Path | None) -> PeekletConfig:
     data = yaml.safe_load(text) if path.suffix in (".yaml", ".yml") else json.loads(text)
 
     return PeekletConfig.model_validate(data or {})
-
-
-def load_patterns(path: Path) -> list[PiiPattern]:
-    """Load custom PII patterns from a YAML file."""
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Patterns file not found: {path}")
-
-    data = yaml.safe_load(path.read_text())
-    raw_patterns = data.get("patterns", [])
-    return [PiiPattern.model_validate(p) for p in raw_patterns]

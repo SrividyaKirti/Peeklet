@@ -65,7 +65,6 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     default=None,
     help="Path to config file (JSON or YAML).",
 )
-@click.option("--no-redact", is_flag=True, default=False, help="Disable PII redaction.")
 @click.option("--no-audio", is_flag=True, default=False, help="Disable audio detection for video.")
 @click.option(
     "--mode",
@@ -85,19 +84,16 @@ def main(
     input_path: Path,
     output_dir: Path,
     config_path: Path | None,
-    no_redact: bool,
     no_audio: bool,
     mode: str | None,
     transcript_path: Path | None,
 ) -> None:
     """Smart screenshot change detection.
 
-    Filters noise from screenshot sequences or video recordings,
-    redacts PII, and exports a structured Parquet manifest of keyframes.
+    Filters noise from screenshot sequences or video recordings
+    and exports a structured Parquet manifest of keyframes.
     """
     config = load_config(config_path)
-    if no_redact:
-        config.redactor.enabled = False
     if no_audio:
         config.video.audio_detection = False
     if transcript_path:

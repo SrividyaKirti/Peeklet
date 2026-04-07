@@ -14,7 +14,6 @@ from peeklet.pipeline import Pipeline
 def basic_config(tmp_output: Path) -> PeekletConfig:
     return PeekletConfig.model_validate(
         {
-            "redactor": {"enabled": False},
             "exporter": {"output_dir": str(tmp_output)},
             "masking": {"block_size": 50, "window_size": 5, "noise_threshold": 0.8},
             "comparator": {"ssim_threshold": 0.85},

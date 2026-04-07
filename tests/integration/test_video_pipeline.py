@@ -41,7 +41,6 @@ class TestVideoEndToEnd:
 
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
-        config.redactor.enabled = False
 
         results = process_video(video_path, config)
 
@@ -103,7 +102,6 @@ class TestVideoEndToEnd:
 
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
-        config.redactor.enabled = False
         config.video.transcript_path = str(srt_path)
 
         results = process_video(video_path, config)
@@ -123,7 +121,6 @@ class TestVideoEndToEnd:
 
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
-        config.redactor.enabled = False
 
         # Process both videos (simulating CLI multi-video behavior)
         all_results = []
