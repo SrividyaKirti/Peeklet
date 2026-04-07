@@ -1,11 +1,15 @@
 """Tests for PII redaction."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 
 from peeklet.config import PiiPattern
+from peeklet.core.ocr import OcrResult
 from peeklet.core.redactor import (
     BUILTIN_PATTERNS,
     build_pattern_set,
+    detect_and_redact,
     find_pii_in_text,
     redact_regions,
 )
@@ -84,3 +88,77 @@ class TestRedactRegions:
         original = frame.copy()
         redact_regions(frame, [Region(x=10, y=10, w=30, h=20)])
         np.testing.assert_array_equal(frame, original)
+
+
+class TestDetectAndRedact:
+    @patch("peeklet.core.redactor.extract_text_regions")
+    def test_detects_and_blacks_out_pii(self, mock_ocr: MagicMock) -> None:
+        """Full flow: OCR finds email -> regex matches -> region blacked out."""
+        mock_ocr.return_value = [
+            OcrResult(
+                text="john@example.com", region=Region(x=10, y=10, w=80, h=15), confidence=0.95
+            ),
+            OcrResult(text="hello world", region=Region(x=10, y=40, w=60, h=15), confidence=0.9),
+        ]
+
+        frame = np.full((100, 200, 3), 200, dtype=np.uint8)
+        patterns = build_pattern_set(pii_types=["email"], custom_patterns=[])
+
+        redacted, pii_found = detect_and_redact(frame, patterns)
+
+        assert pii_found is True
+        # Email region should be blacked out
+        assert np.all(redacted[10:25, 10:90] == 0)
+        # Non-PII region should be untouched
+        assert np.all(redacted[40:55, 10:70] == 200)
+
+    @patch("peeklet.core.redactor.extract_text_regions")
+    def test_no_pii_returns_original(self, mock_ocr: MagicMock) -> None:
+        mock_ocr.return_value = [
+            OcrResult(text="hello world", region=Region(x=10, y=10, w=60, h=15), confidence=0.9),
+        ]
+
+        frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+        patterns = build_pattern_set(pii_types=["email"], custom_patterns=[])
+
+        redacted, pii_found = detect_and_redact(frame, patterns)
+
+        assert pii_found is False
+        np.testing.assert_array_equal(redacted, frame)
+
+    @patch("peeklet.core.redactor.extract_text_regions")
+    def test_no_ocr_results_returns_original(self, mock_ocr: MagicMock) -> None:
+        mock_ocr.return_value = []
+
+        frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+        patterns = build_pattern_set(pii_types=["email"], custom_patterns=[])
+
+        redacted, pii_found = detect_and_redact(frame, patterns)
+
+        assert pii_found is False
+        np.testing.assert_array_equal(redacted, frame)
+
+    @patch("peeklet.core.redactor.extract_text_from_regions")
+    def test_uses_changed_regions_when_provided(self, mock_ocr_regions: MagicMock) -> None:
+        """When changed_regions are passed, OCR only those areas."""
+        mock_ocr_regions.return_value = [
+            OcrResult(text="123-45-6789", region=Region(x=50, y=80, w=70, h=12), confidence=0.9),
+        ]
+
+        frame = np.full((200, 200, 3), 200, dtype=np.uint8)
+        patterns = build_pattern_set(pii_types=["ssn"], custom_patterns=[])
+        changed = [Region(x=50, y=80, w=100, h=40)]
+
+        redacted, pii_found = detect_and_redact(frame, patterns, changed_regions=changed)
+
+        assert pii_found is True
+        mock_ocr_regions.assert_called_once_with(frame, changed)
+
+    def test_empty_patterns_skips_ocr(self) -> None:
+        """When no patterns are configured, skip OCR entirely."""
+        frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+
+        redacted, pii_found = detect_and_redact(frame, patterns=[])
+
+        assert pii_found is False
+        np.testing.assert_array_equal(redacted, frame)

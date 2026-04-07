@@ -68,6 +68,9 @@ Issues = "https://github.com/SrividyaKirti/Peeklet/issues"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/peeklet"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100
@@ -91,12 +94,14 @@ module = [
     "imageio.*",
     "imageio_ffmpeg.*",
     "pydub.*",
+    "easyocr.*",
 ]
 ignore_missing_imports = true
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
     "datasets: tests requiring downloaded datasets (deselect with '-m not datasets')",
     "mind2web: tests requiring Mind2Web dataset (deselect with '-m not mind2web')",

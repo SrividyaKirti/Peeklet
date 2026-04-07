@@ -13,9 +13,9 @@ jobs:
         with:
           version: "latest"
       - run: uv sync --all-extras --dev
-      - run: uv run ruff check peeklet/ tests/
-      - run: uv run ruff format --check peeklet/ tests/
-      - run: uv run mypy peeklet/
+      - run: uv run ruff check src/peeklet/ tests/
+      - run: uv run ruff format --check src/peeklet/ tests/
+      - run: uv run mypy src/peeklet/
 
   test:
     runs-on: ubuntu-latest
@@ -27,7 +27,7 @@ jobs:
         with:
           version: "latest"
       - run: uv sync --all-extras --dev
-      - run: uv run pytest tests/unit/ --cov=peeklet --cov-fail-under=90 -v
+      - run: uv run pytest tests/unit/ --cov=src/peeklet --cov-fail-under=90 -v
       - run: uv run pytest tests/integration/ -v
 
   build:

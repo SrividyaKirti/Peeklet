@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from peeklet.config import PiiPattern
+from peeklet.core.ocr import extract_text_from_regions, extract_text_regions
 
 if TYPE_CHECKING:
     import numpy as np
@@ -88,3 +89,46 @@ def redact_regions(frame: np.ndarray, regions: list[Region]) -> np.ndarray:
         y2 = min(h, region.y + region.h)
         redacted[y1:y2, x1:x2] = 0
     return redacted
+
+
+def detect_and_redact(
+    frame: np.ndarray,
+    patterns: list[PiiPattern],
+    changed_regions: list[Region] | None = None,
+) -> tuple[np.ndarray, bool]:
+    """Run OCR on the frame, detect PII via regex, and redact matching regions.
+
+    Args:
+        frame: RGB uint8 numpy array (the keyframe to redact).
+        patterns: PII patterns to match against OCR text.
+        changed_regions: If provided, OCR only these regions (more efficient).
+
+    Returns:
+        Tuple of (redacted_frame, pii_detected). If no PII found, returns
+        original frame (not a copy) and False.
+    """
+    if not patterns:
+        return frame, False
+
+    # Step 1: OCR — full frame or just changed regions
+    if changed_regions:
+        ocr_results = extract_text_from_regions(frame, changed_regions)
+    else:
+        ocr_results = extract_text_regions(frame)
+
+    if not ocr_results:
+        return frame, False
+
+    # Step 2: Run regex patterns against each OCR result's text
+    regions_to_redact: list[Region] = []
+    for ocr_hit in ocr_results:
+        matches = find_pii_in_text(ocr_hit.text, patterns)
+        if matches:
+            regions_to_redact.append(ocr_hit.region)
+
+    if not regions_to_redact:
+        return frame, False
+
+    # Step 3: Black-box the PII regions
+    redacted = redact_regions(frame, regions_to_redact)
+    return redacted, True
