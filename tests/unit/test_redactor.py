@@ -21,6 +21,21 @@ class TestBuiltinPatterns:
         matches = find_pii_in_text("contact me at john@example.com please", BUILTIN_PATTERNS)
         assert any(m.pattern_name == "email" for m in matches)
 
+    def test_email_display_name_pattern(self) -> None:
+        """Gmail-style 'Name (domain.com)' should match as email PII."""
+        matches = find_pii_in_text("Srividya Krithivasan (gmail.com)", BUILTIN_PATTERNS)
+        assert any(m.pattern_name == "email" for m in matches)
+
+    def test_email_display_name_with_dot(self) -> None:
+        """Display name with subdomain should match."""
+        matches = find_pii_in_text("John Smith (mail.example.org)", BUILTIN_PATTERNS)
+        assert any(m.pattern_name == "email" for m in matches)
+
+    def test_email_display_name_no_false_positive(self) -> None:
+        """Parenthesized text without a valid domain should not match."""
+        matches = find_pii_in_text("see notes (above)", BUILTIN_PATTERNS)
+        assert not any(m.pattern_name == "email" for m in matches)
+
     def test_phone_pattern(self) -> None:
         matches = find_pii_in_text("call 555-123-4567 now", BUILTIN_PATTERNS)
         assert any(m.pattern_name == "phone" for m in matches)

@@ -17,8 +17,11 @@ if TYPE_CHECKING:
 BUILTIN_PATTERNS: list[PiiPattern] = [
     PiiPattern(
         name="email",
-        regex=r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-        description="Email addresses",
+        regex=(
+            r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+            r"|[A-Za-z][A-Za-z .'-]+\s*\([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\)"
+        ),
+        description="Email addresses and display-name formats like 'Name (domain.com)'",
     ),
     PiiPattern(
         name="phone", regex=r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b", description="US phone numbers"
