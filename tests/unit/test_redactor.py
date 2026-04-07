@@ -23,9 +23,7 @@ class TestBuiltinPatterns:
 
     def test_email_display_name_pattern(self) -> None:
         """Gmail-style 'Name (domain.com)' should match as email PII."""
-        matches = find_pii_in_text(
-            "Srividya Krithivasan (gmail.com)", BUILTIN_PATTERNS
-        )
+        matches = find_pii_in_text("Srividya Krithivasan (gmail.com)", BUILTIN_PATTERNS)
         assert any(m.pattern_name == "email" for m in matches)
 
     def test_email_display_name_with_dot(self) -> None:
