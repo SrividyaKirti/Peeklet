@@ -66,6 +66,7 @@ class FrameResult:
     source_format: str | None = None
     asset_path: str | None = None
     visual_reason: str | None = None
+    trigger_type: str | None = None  # "visual_change", "transcript_trigger", "both"
     prev_keyframe_id: str | None = None
     prev_keyframe_path: str | None = None
     # Video-specific fields (all None for image-sourced frames)
