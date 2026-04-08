@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -14,9 +14,16 @@ from peeklet.core.audio import (
     get_audio_activity,
     parse_transcript,
 )
-from peeklet.core.exporter import ManifestWriter
+from peeklet.core.context_exporter import (
+    build_context,
+    timestamp_filename,
+    write_context_json,
+    write_context_markdown,
+)
+from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
+from peeklet.utils.types import EventType
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -148,10 +155,31 @@ def _change_magnitude(result: FrameResult) -> str:
     return "minor"
 
 
+def _should_force_keyframe(
+    timestamp: float, forced_timestamps: list[float], tolerance: float = 0.5
+) -> bool:
+    """Check if a frame timestamp is close enough to a forced timestamp."""
+    return any(abs(timestamp - ft) <= tolerance for ft in forced_timestamps)
+
+
+def _merge_trigger_type(
+    is_visual: bool, is_transcript: bool
+) -> Literal["visual_change", "transcript_trigger", "both"] | None:
+    """Determine trigger_type from visual and transcript flags."""
+    if is_visual and is_transcript:
+        return "both"
+    if is_visual:
+        return "visual_change"
+    if is_transcript:
+        return "transcript_trigger"
+    return None
+
+
 def process_video(
     path: Path,
     config: PeekletConfig,
     writer: ManifestWriter | None = None,
+    forced_timestamps: list[float] | None = None,
 ) -> list[FrameResult]:
     """Process a video file through smart sampling + Peeklet pipeline.
 
@@ -164,8 +192,17 @@ def process_video(
         config: Peeklet configuration.
         writer: Optional shared ManifestWriter for multi-video processing.
             If None, a new writer is created and flushed automatically.
+        forced_timestamps: Optional list of timestamps in seconds at which
+            keyframes should be forced regardless of visual change. These are
+            typically derived from transcript trigger words and are used to
+            anchor keyframes at narratively-important moments.
 
     Returns list of FrameResult for all processed frames.
+
+    Note:
+        ``process_video()`` always writes ``context.json`` and ``context.md``
+        to the configured output directory, even when no transcript is
+        supplied.
     """
     decoder = VideoDecoder(path)
     meta = decoder.get_metadata()
@@ -227,6 +264,7 @@ def process_video(
     results: list[FrameResult] = []
     keyframe_count = 0
     prev_keyframe_ts: float | None = None
+    forced_ts = forced_timestamps or []
 
     for frame, ts, frame_num in all_frames:
         frame_id = f"frame_{frame_num:06d}"
@@ -236,6 +274,33 @@ def process_video(
             source_format="video",
         )
 
+        # Determine whether this frame should be a forced keyframe
+        is_forced = _should_force_keyframe(ts, forced_ts)
+        was_visual_keyframe = result.is_keyframe
+
+        # If forced but pipeline didn't pick it as a keyframe, promote it
+        if is_forced and not result.is_keyframe:
+            asset_path = save_keyframe(
+                frame,
+                Path(config.exporter.output_dir),
+                frame_id,
+                fmt=config.exporter.keyframe_format,
+            )
+            result.is_keyframe = True
+            result.event_type = EventType.KEYFRAME
+            result.asset_path = str(asset_path)
+            result.visual_reason = "Transcript trigger"
+            # Update pipeline rolling state so subsequent visual comparisons
+            # anchor against this newly-promoted keyframe.
+            final_pipeline.update_reference_state(frame, frame_id, str(asset_path))
+
+        # Set trigger_type on every keyframe
+        if result.is_keyframe:
+            result.trigger_type = _merge_trigger_type(
+                is_visual=was_visual_keyframe,
+                is_transcript=is_forced,
+            )
+
         # Enrich with video metadata
         result.source_video = meta.filename
         result.video_timestamp = ts
@@ -244,8 +309,8 @@ def process_video(
 
         if result.is_keyframe:
             keyframe_count += 1
-            new_frame_id = f"step_{keyframe_count:03d}"
-            # Rename the saved keyframe image to use the step_NNN name
+            new_frame_id = timestamp_filename(ts)
+            # Rename the saved keyframe image to use the timestamp-based name
             if result.asset_path:
                 old_path = Path(result.asset_path)
                 new_path = old_path.with_name(new_frame_id + old_path.suffix)
@@ -293,6 +358,12 @@ def process_video(
             r.audio_activity = get_audio_activity(ts, speech_segments)
         elif config.video.audio_detection:
             r.audio_activity = "silence"
+
+    # --- Context export (JSON + Markdown) ---
+    transcript_for_context = transcript_segments or []
+    ctx = build_context(meta.filename, meta.duration, results, transcript_for_context)
+    write_context_json(ctx, output_dir / "context.json")
+    write_context_markdown(ctx, output_dir / "context.md")
 
     # Write fully-enriched results to the manifest
     for r in results:

@@ -65,7 +65,6 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     default=None,
     help="Path to config file (JSON or YAML).",
 )
-@click.option("--no-redact", is_flag=True, default=False, help="Disable PII redaction.")
 @click.option("--no-audio", is_flag=True, default=False, help="Disable audio detection for video.")
 @click.option(
     "--mode",
@@ -85,19 +84,16 @@ def main(
     input_path: Path,
     output_dir: Path,
     config_path: Path | None,
-    no_redact: bool,
     no_audio: bool,
     mode: str | None,
     transcript_path: Path | None,
 ) -> None:
     """Smart screenshot change detection.
 
-    Filters noise from screenshot sequences or video recordings,
-    redacts PII, and exports a structured Parquet manifest of keyframes.
+    Filters noise from screenshot sequences or video recordings
+    and exports a structured Parquet manifest of keyframes.
     """
     config = load_config(config_path)
-    if no_redact:
-        config.redactor.enabled = False
     if no_audio:
         config.video.audio_detection = False
     if transcript_path:
@@ -115,8 +111,19 @@ def main(
 
 def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> None:
     """Process video file(s)."""
+    from peeklet.core.audio import parse_transcript
     from peeklet.core.exporter import ManifestWriter
+    from peeklet.core.transcript_trigger import detect_triggers
     from peeklet.core.video import process_video
+
+    # Detect transcript triggers if transcript is provided
+    forced_timestamps: list[float] = []
+    if config.video.transcript_path:
+        segments = parse_transcript(Path(config.video.transcript_path))
+        triggers = detect_triggers(segments)
+        forced_timestamps = [t.timestamp for t in triggers]
+        if triggers:
+            click.echo(f"Found {len(triggers)} transcript trigger(s)")
 
     if input_path.is_file():
         video_files = [input_path]
@@ -129,6 +136,12 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
         click.echo(f"No video files found in {input_path}")
         return
 
+    if len(video_files) > 1 and config.video.transcript_path:
+        raise click.UsageError(
+            "--transcript can only be used with a single video file, "
+            f"not a directory of {len(video_files)} videos."
+        )
+
     click.echo(f"Processing {len(video_files)} video(s)")
 
     output_dir = Path(config.exporter.output_dir)
@@ -140,17 +153,17 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
     total_keyframes = 0
     for vf in video_files:
         click.echo(f"  Processing: {vf.name}")
-        results = process_video(vf, config, writer=writer)
+        results = process_video(vf, config, writer=writer, forced_timestamps=forced_timestamps)
         kf_count = sum(1 for r in results if r.is_keyframe)
         total_keyframes += kf_count
         click.echo(f"    {kf_count} keyframes extracted")
 
     writer.flush()
 
-    output_dir = Path(config.exporter.output_dir)
     click.echo(
         f"Done: {total_keyframes} total keyframes. Manifest: {output_dir / 'manifest.parquet'}"
     )
+    click.echo(f"Context: {output_dir / 'context.json'}, {output_dir / 'context.md'}")
 
 
 def _run_image_mode(

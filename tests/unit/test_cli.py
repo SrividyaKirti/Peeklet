@@ -40,7 +40,7 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["--input", str(input_dir), "--output", str(output_dir), "--no-redact"],
+            ["--input", str(input_dir), "--output", str(output_dir)],
         )
         assert result.exit_code == 0
 
@@ -55,9 +55,7 @@ class TestCli:
         _create_test_images(input_dir, count=3)
 
         config_file = tmp_path / "config.json"
-        config_file.write_text(
-            '{"comparator": {"ssim_threshold": 0.5}, "redactor": {"enabled": false}}'
-        )
+        config_file.write_text('{"comparator": {"ssim_threshold": 0.5}}')
 
         runner = CliRunner()
         result = runner.invoke(
@@ -99,7 +97,6 @@ class TestVideoCliDetection:
                 str(video_path),
                 "--output",
                 str(tmp_path / "output"),
-                "--no-redact",
             ],
         )
         assert result.exit_code == 0
@@ -125,7 +122,6 @@ class TestVideoCliDetection:
                 str(tmp_path),
                 "--output",
                 str(tmp_path / "output"),
-                "--no-redact",
             ],
         )
         assert result.exit_code == 0
@@ -181,7 +177,6 @@ class TestVideoCliDetection:
                 str(tmp_path / "output"),
                 "--mode",
                 "video",
-                "--no-redact",
             ],
         )
         assert result.exit_code == 0
@@ -208,9 +203,74 @@ class TestVideoCliDetection:
                 str(video_path),
                 "--output",
                 str(tmp_path / "output"),
-                "--no-redact",
                 "--transcript",
                 str(srt_path),
             ],
         )
         assert result.exit_code == 0
+
+    def test_video_with_transcript_full_cli_flow(self, tmp_path: Path) -> None:
+        """CLI processes video + transcript and produces context files."""
+        import imageio.v3 as iio
+
+        video_path = tmp_path / "demo.mp4"
+        # Two solid color frames - guarantees one visual change keyframe
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 30 + [
+            np.full((60, 80, 3), 255, dtype=np.uint8)
+        ] * 30
+        with iio.imopen(video_path, "w", plugin="pyav") as out:
+            out.init_video_stream("libx264", fps=30)
+            for f in frames:
+                out.write_frame(f)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nLook at this dashboard here\n\n")
+
+        output_dir = tmp_path / "output"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(video_path),
+                "--output",
+                str(output_dir),
+                "--transcript",
+                str(srt_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "transcript trigger" in result.output.lower()
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()
+
+    def test_directory_with_transcript_errors(self, tmp_path: Path) -> None:
+        """CLI errors when --transcript is used with a directory of videos."""
+        import imageio.v3 as iio
+
+        for name in ["a.mp4", "b.mp4"]:
+            video_path = tmp_path / name
+            frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+            with iio.imopen(video_path, "w", plugin="pyav") as out:
+                out.init_video_stream("libx264", fps=10)
+                for f in frames:
+                    out.write_frame(f)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "output"),
+                "--transcript",
+                str(srt_path),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "transcript" in result.output.lower()
+        assert "single video" in result.output.lower()

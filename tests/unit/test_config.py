@@ -14,7 +14,6 @@ from peeklet.config import (
     PeekletConfig,
     PipelineConfig,
     load_config,
-    load_patterns,
 )
 
 
@@ -27,7 +26,6 @@ class TestDefaults:
         assert config.masking.noise_threshold == 0.8
         assert config.hasher.algorithm == "phash"
         assert config.comparator.ssim_threshold == 0.85
-        assert config.redactor.enabled is True
         assert config.exporter.keyframe_format == "png"
         assert config.exporter.parquet_compression == "snappy"
 
@@ -151,40 +149,3 @@ class TestVideoConfig:
         assert config.video.formats == ["mp4", "webm"]
         assert config.video.audio_detection is False
         assert config.video.transcript_path == "/tmp/captions.srt"
-
-
-class TestPatternLoading:
-    def test_load_custom_patterns(self, tmp_path: Path) -> None:
-        patterns_data = {
-            "patterns": [
-                {
-                    "name": "employee_id",
-                    "regex": r"EMP-\d{6}",
-                    "description": "Employee ID",
-                },
-            ]
-        }
-        patterns_file = tmp_path / "patterns.yaml"
-        patterns_file.write_text(yaml.dump(patterns_data))
-
-        patterns = load_patterns(patterns_file)
-        assert len(patterns) == 1
-        assert patterns[0].name == "employee_id"
-        assert patterns[0].regex == r"EMP-\d{6}"
-        assert patterns[0].enabled is True
-
-    def test_disabled_pattern(self, tmp_path: Path) -> None:
-        patterns_data = {
-            "patterns": [
-                {"name": "ssn", "enabled": False},
-            ]
-        }
-        patterns_file = tmp_path / "patterns.yaml"
-        patterns_file.write_text(yaml.dump(patterns_data))
-
-        patterns = load_patterns(patterns_file)
-        assert patterns[0].enabled is False
-
-    def test_load_missing_patterns_file_raises(self) -> None:
-        with pytest.raises(FileNotFoundError):
-            load_patterns(Path("/nonexistent/patterns.yaml"))

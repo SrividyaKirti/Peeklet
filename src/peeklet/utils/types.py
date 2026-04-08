@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -65,8 +65,8 @@ class FrameResult:
     adaptive_mask: list[Region] | None = None
     source_format: str | None = None
     asset_path: str | None = None
-    pii_detected: bool | None = None
     visual_reason: str | None = None
+    trigger_type: Literal["visual_change", "transcript_trigger", "both"] | None = None
     prev_keyframe_id: str | None = None
     prev_keyframe_path: str | None = None
     # Video-specific fields (all None for image-sourced frames)

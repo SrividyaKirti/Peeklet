@@ -66,7 +66,6 @@ class TestFrameResult:
             adaptive_mask=[Region(x=0, y=0, w=32, h=32)],
             frame_width=1920,
             frame_height=1080,
-            pii_detected=False,
         )
         assert result.is_keyframe is True
         assert result.event_type == EventType.KEYFRAME
@@ -110,6 +109,7 @@ class TestFrameResultVideoFields:
         assert result.total_keyframes is None
         assert result.video_duration is None
         assert result.change_magnitude is None
+        assert result.trigger_type is None
 
     def test_video_fields_set_explicitly(self) -> None:
         result = FrameResult(
@@ -129,6 +129,7 @@ class TestFrameResultVideoFields:
             total_keyframes=42,
             video_duration=120.0,
             change_magnitude="major",
+            trigger_type="visual_change",
         )
         assert result.source_video == "/path/to/video.mp4"
         assert result.video_timestamp == 12.5
@@ -140,3 +141,4 @@ class TestFrameResultVideoFields:
         assert result.total_keyframes == 42
         assert result.video_duration == 120.0
         assert result.change_magnitude == "major"
+        assert result.trigger_type == "visual_change"

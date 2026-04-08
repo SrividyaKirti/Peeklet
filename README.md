@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
-Smart screenshot change detection. Filters noise, redacts PII, exports structured Parquet manifests of keyframes.
+Smart screenshot change detection. Filters noise, exports structured Parquet manifests of keyframes with LLM-ready context output.
 
 Given a stream of screenshots captured every few seconds, Peeklet determines which frames represent meaningful changes (keyframes) and which are noise (cursor blinks, clock ticks, video playback). It reduces downstream OCR/LLM processing costs by 80-90%.
 
@@ -13,7 +13,8 @@ Given a stream of screenshots captured every few seconds, Peeklet determines whi
 - **Cascade filtering** -- perceptual hashing, SSIM, and adaptive masking eliminate duplicate and noisy frames early
 - **Adaptive masking** -- auto-detects and ignores high-frequency change regions (video players, ads, clocks)
 - **Video support** -- two-pass smart sampling with audio/transcript alignment
-- **PII redaction** -- regex-based detection of emails, phone numbers, SSNs, credit cards, IPs (optional)
+- **LLM-ready context export** -- JSON + Markdown output with bidirectional transcript/screenshot linking
+- **Transcript trigger detection** -- automatically captures screenshots when presenter references the screen
 - **Parquet export** -- DuckDB-ready manifests with per-frame metadata and keyframe linking
 - **Zero-config defaults** -- works out of the box, fully tunable via JSON/YAML
 
@@ -26,9 +27,6 @@ pip install peeklet
 ### Extras
 
 ```bash
-# PII redaction via OCR
-pip install peeklet[ocr]
-
 # Video file support (mp4, mov, webm)
 pip install peeklet[video]
 
@@ -44,11 +42,11 @@ pip install peeklet[dev]
 # Process a directory of screenshots
 peeklet --input ./screenshots --output ./output
 
-# Skip PII redaction
-peeklet --input ./screenshots --output ./output --no-redact
-
 # Process a video file
 peeklet --input recording.mp4 --output ./output
+
+# Process video with transcript (produces JSON + Markdown context)
+peeklet --input recording.mp4 --output ./output --transcript captions.srt
 
 # Use a config file
 peeklet --input ./screenshots --output ./output --config config.yaml
@@ -115,10 +113,7 @@ Frame
 [3. SSIM Comparison]  -- structural similarity, kills ~15% more (subtle noise)
   |
   v
-[4. PII Redaction]    -- regex on keyframes only (optional)
-  |
-  v
-[5. Parquet Export]    -- DuckDB-ready manifest with per-frame metadata
+[4. Parquet Export]    -- DuckDB-ready manifest with per-frame metadata
 ```
 
 For video files, a two-pass strategy avoids decoding every frame:
@@ -275,7 +270,6 @@ Options:
   --input PATH              Directory of images or video file (required)
   --output PATH             Output directory (default: ./output)
   --config PATH             JSON or YAML config file
-  --no-redact               Disable PII redaction
   --no-audio                Disable audio detection for video
   --mode [video|image]      Force processing mode
   --transcript PATH         Path to SRT/VTT transcript file
@@ -308,17 +302,6 @@ comparator:
   min_changed_pct: 2.0  # minimum % of blocks changed
   min_changed_blocks: 3 # minimum block count for keyframe
 
-redactor:
-  enabled: true
-  pii_types:            # types to detect
-    - email
-    - phone
-    - ssn
-    - credit_card
-    - ip_address
-    - address
-  custom_patterns_file: null  # path to custom patterns YAML
-
 exporter:
   output_dir: ./output
   keyframe_format: png        # "png" or "jpg"
@@ -340,22 +323,6 @@ video:
   formats: [mp4, mov, webm]
   audio_detection: true
   transcript_path: null # path to SRT/VTT file
-```
-
-### Custom PII Patterns
-
-```yaml
-# custom_patterns.yaml
-patterns:
-  - name: employee_id
-    regex: "\\bEMP-\\d{6}\\b"
-    description: "Internal employee ID"
-    enabled: true
-```
-
-```bash
-peeklet --input ./screenshots --config config.yaml
-# where config.yaml has: redactor.custom_patterns_file: custom_patterns.yaml
 ```
 
 ## Output Format
@@ -426,7 +393,6 @@ peeklet/
     masking.py         # AdaptiveMask -- noise region detection
     comparator.py      # SSIM comparison and block-level diff
     exporter.py        # ManifestWriter and Parquet schema
-    redactor.py        # PII pattern matching
     audio.py           # transcript parsing and speech detection
     video.py           # VideoDecoder and two-pass processing
   utils/
@@ -438,7 +404,7 @@ peeklet/
 
 - Python 3.10+
 - Core: numpy, Pillow, scikit-image, imagehash, pyarrow, pydantic, click, pyyaml
-- Optional: easyocr, pymupdf (OCR), imageio, av, pydub (video)
+- Optional: imageio, av, pydub (video)
 
 ## License
 

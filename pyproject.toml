@@ -1,7 +1,7 @@
 [project]
 name = "peeklet"
 version = "0.1.0"
-description = "Smart screenshot change detection — filters noise, redacts PII, exports structured keyframe manifests"
+description = "Smart screenshot change detection — filters noise, exports structured keyframe manifests with LLM-ready context"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -33,10 +33,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ocr = [
-    "easyocr>=1.7",
-    "pymupdf>=1.23",
-]
 video = [
     "imageio[ffmpeg]>=2.31",
     "av>=14.0",
@@ -94,7 +90,7 @@ module = [
     "imageio.*",
     "imageio_ffmpeg.*",
     "pydub.*",
-    "easyocr.*",
+
 ]
 ignore_missing_imports = true
 disallow_untyped_calls = false

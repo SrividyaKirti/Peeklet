@@ -32,7 +32,6 @@ def _make_config(output_dir: Path) -> PeekletConfig:
     """Create pipeline config for dataset testing."""
     return PeekletConfig.model_validate(
         {
-            "redactor": {"enabled": False},
             "exporter": {"output_dir": str(output_dir)},
         }
     )
