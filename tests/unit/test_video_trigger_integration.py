@@ -21,10 +21,20 @@ class TestShouldForceKeyframe:
         forced = [10.0]
         assert _should_force_keyframe(10.0, forced, tolerance=0.5) is True
 
-    def test_boundary_tolerance(self) -> None:
+    def test_inclusive_upper_boundary(self) -> None:
+        """A timestamp exactly at +tolerance is included."""
         forced = [10.0]
         assert _should_force_keyframe(10.5, forced, tolerance=0.5) is True
+
+    def test_just_outside_upper_boundary(self) -> None:
+        """A timestamp just past +tolerance is excluded."""
+        forced = [10.0]
         assert _should_force_keyframe(10.6, forced, tolerance=0.5) is False
+
+    def test_inclusive_lower_boundary(self) -> None:
+        """A timestamp exactly at -tolerance is included (abs symmetry)."""
+        forced = [10.0]
+        assert _should_force_keyframe(9.5, forced, tolerance=0.5) is True
 
 
 class TestMergeTriggerType:

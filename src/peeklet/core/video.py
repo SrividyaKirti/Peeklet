@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -155,7 +155,9 @@ def _should_force_keyframe(
     return any(abs(timestamp - ft) <= tolerance for ft in forced_timestamps)
 
 
-def _merge_trigger_type(is_visual: bool, is_transcript: bool) -> str | None:
+def _merge_trigger_type(
+    is_visual: bool, is_transcript: bool
+) -> Literal["visual_change", "transcript_trigger", "both"] | None:
     """Determine trigger_type from visual and transcript flags."""
     if is_visual and is_transcript:
         return "both"
