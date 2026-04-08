@@ -14,9 +14,16 @@ from peeklet.core.audio import (
     get_audio_activity,
     parse_transcript,
 )
-from peeklet.core.exporter import ManifestWriter
+from peeklet.core.context_exporter import (
+    build_context,
+    timestamp_filename,
+    write_context_json,
+    write_context_markdown,
+)
+from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
+from peeklet.utils.types import EventType
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -172,6 +179,7 @@ def process_video(
     path: Path,
     config: PeekletConfig,
     writer: ManifestWriter | None = None,
+    forced_timestamps: list[float] | None = None,
 ) -> list[FrameResult]:
     """Process a video file through smart sampling + Peeklet pipeline.
 
@@ -247,6 +255,7 @@ def process_video(
     results: list[FrameResult] = []
     keyframe_count = 0
     prev_keyframe_ts: float | None = None
+    forced_ts = forced_timestamps or []
 
     for frame, ts, frame_num in all_frames:
         frame_id = f"frame_{frame_num:06d}"
@@ -256,6 +265,30 @@ def process_video(
             source_format="video",
         )
 
+        # Determine whether this frame should be a forced keyframe
+        is_forced = _should_force_keyframe(ts, forced_ts)
+        was_visual_keyframe = result.is_keyframe
+
+        # If forced but pipeline didn't pick it as a keyframe, promote it
+        if is_forced and not result.is_keyframe:
+            asset_path = save_keyframe(
+                frame,
+                Path(config.exporter.output_dir),
+                frame_id,
+                fmt=config.exporter.keyframe_format,
+            )
+            result.is_keyframe = True
+            result.event_type = EventType.KEYFRAME
+            result.asset_path = str(asset_path)
+            result.visual_reason = "Transcript trigger"
+
+        # Set trigger_type on every keyframe
+        if result.is_keyframe:
+            result.trigger_type = _merge_trigger_type(
+                is_visual=was_visual_keyframe,
+                is_transcript=is_forced,
+            )
+
         # Enrich with video metadata
         result.source_video = meta.filename
         result.video_timestamp = ts
@@ -264,8 +297,8 @@ def process_video(
 
         if result.is_keyframe:
             keyframe_count += 1
-            new_frame_id = f"step_{keyframe_count:03d}"
-            # Rename the saved keyframe image to use the step_NNN name
+            new_frame_id = timestamp_filename(ts)
+            # Rename the saved keyframe image to use the timestamp-based name
             if result.asset_path:
                 old_path = Path(result.asset_path)
                 new_path = old_path.with_name(new_frame_id + old_path.suffix)
@@ -313,6 +346,13 @@ def process_video(
             r.audio_activity = get_audio_activity(ts, speech_segments)
         elif config.video.audio_detection:
             r.audio_activity = "silence"
+
+    # --- Context export (JSON + Markdown) ---
+    output_dir_path = Path(config.exporter.output_dir)
+    transcript_for_context = transcript_segments or []
+    ctx = build_context(meta.filename, meta.duration, results, transcript_for_context)
+    write_context_json(ctx, output_dir_path / "context.json")
+    write_context_markdown(ctx, output_dir_path / "context.md")
 
     # Write fully-enriched results to the manifest
     for r in results:
