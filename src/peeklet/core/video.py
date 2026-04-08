@@ -192,8 +192,17 @@ def process_video(
         config: Peeklet configuration.
         writer: Optional shared ManifestWriter for multi-video processing.
             If None, a new writer is created and flushed automatically.
+        forced_timestamps: Optional list of timestamps in seconds at which
+            keyframes should be forced regardless of visual change. These are
+            typically derived from transcript trigger words and are used to
+            anchor keyframes at narratively-important moments.
 
     Returns list of FrameResult for all processed frames.
+
+    Note:
+        ``process_video()`` always writes ``context.json`` and ``context.md``
+        to the configured output directory, even when no transcript is
+        supplied.
     """
     decoder = VideoDecoder(path)
     meta = decoder.get_metadata()
@@ -281,6 +290,9 @@ def process_video(
             result.event_type = EventType.KEYFRAME
             result.asset_path = str(asset_path)
             result.visual_reason = "Transcript trigger"
+            # Update pipeline rolling state so subsequent visual comparisons
+            # anchor against this newly-promoted keyframe.
+            final_pipeline.update_reference_state(frame, frame_id, str(asset_path))
 
         # Set trigger_type on every keyframe
         if result.is_keyframe:
@@ -348,11 +360,10 @@ def process_video(
             r.audio_activity = "silence"
 
     # --- Context export (JSON + Markdown) ---
-    output_dir_path = Path(config.exporter.output_dir)
     transcript_for_context = transcript_segments or []
     ctx = build_context(meta.filename, meta.duration, results, transcript_for_context)
-    write_context_json(ctx, output_dir_path / "context.json")
-    write_context_markdown(ctx, output_dir_path / "context.md")
+    write_context_json(ctx, output_dir / "context.json")
+    write_context_markdown(ctx, output_dir / "context.md")
 
     # Write fully-enriched results to the manifest
     for r in results:
