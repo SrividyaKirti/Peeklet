@@ -61,6 +61,8 @@ def build_context(
         transcript.append(
             {
                 "id": j + 1,
+                "start_s": seg.start,
+                "end_s": seg.end,
                 "start": format_timestamp(seg.start),
                 "end": format_timestamp(seg.end),
                 "text": seg.text,
@@ -108,8 +110,28 @@ def _format_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
+def _screenshot_block(s: dict[str, Any]) -> list[str]:
+    """Render a screenshot annotation block as Markdown lines."""
+    trigger_label = (s["trigger"] or "visual_change").replace("_", " ")
+    since = s["seconds_since_prev_screenshot"]
+    since_str = f"{since:.1f}s" if since is not None else "\u2014"
+    return [
+        f"## Screenshot {s['id']} ({s['timestamp']}) — {trigger_label}",
+        f"![{s['file']}]({s['file']})",
+        f"**Change:** {s['change_magnitude']} | **Since prev:** {since_str}",
+        "",
+    ]
+
+
 def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
-    """Write context data as Markdown with inline image references."""
+    """Write context data as Markdown — the original transcript with
+    screenshot annotation blocks injected inline at their timestamp positions.
+
+    The transcript is the primary document. Screenshots are inserted between
+    transcript segments at the chronological position matching their
+    ``timestamp_s``. If there is no transcript, screenshots are listed in
+    chronological order.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -123,25 +145,29 @@ def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
         "",
     ]
 
-    transcript_by_id: dict[int, str] = {t["id"]: t["text"] for t in ctx["transcript"]}
+    transcript = sorted(ctx["transcript"], key=lambda t: t["start_s"])
+    screenshots = sorted(ctx["screenshots"], key=lambda s: s["timestamp_s"])
 
-    for s in ctx["screenshots"]:
-        trigger_label = s["trigger"].replace("_", " ")
-        lines.append(f"## Screenshot {s['id']} ({s['timestamp']}) — {trigger_label}")
-        lines.append(f"![{s['file']}]({s['file']})")
+    # Merge transcript and screenshots in chronological order. A screenshot
+    # is emitted right before the next transcript segment that starts after
+    # the screenshot's timestamp, so it appears immediately after the line
+    # being spoken when the visual change occurred.
+    seg_idx = 0
+    shot_idx = 0
+    inf = float("inf")
+    while seg_idx < len(transcript) or shot_idx < len(screenshots):
+        next_seg_time = transcript[seg_idx]["start_s"] if seg_idx < len(transcript) else inf
+        next_shot_time = (
+            screenshots[shot_idx]["timestamp_s"] if shot_idx < len(screenshots) else inf
+        )
 
-        since = s["seconds_since_prev_screenshot"]
-        since_str = f"{since:.1f}s" if since is not None else "\u2014"
-        lines.append(f"**Change:** {s['change_magnitude']} | **Since prev:** {since_str}")
-        lines.append("")
+        if next_seg_time <= next_shot_time:
+            seg = transcript[seg_idx]
+            lines.append(f"**[{seg['start']} \u2192 {seg['end']}]** {seg['text']}")
+            lines.append("")
+            seg_idx += 1
+        else:
+            lines.extend(_screenshot_block(screenshots[shot_idx]))
+            shot_idx += 1
 
-        for tid in s["transcript_ids"]:
-            text = transcript_by_id.get(tid, "")
-            if text:
-                lines.append(f'> "{text}"')
-                lines.append("")
-
-        lines.append("---")
-        lines.append("")
-
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines) + "\n")

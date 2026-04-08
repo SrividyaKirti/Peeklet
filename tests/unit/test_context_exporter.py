@@ -152,6 +152,8 @@ class TestWriteContextMarkdown:
             "transcript": [
                 {
                     "id": 1,
+                    "start_s": 4.5,
+                    "end_s": 7.0,
                     "start": "00:00:04.500",
                     "end": "00:00:07.000",
                     "text": "Look at this chart",
@@ -168,3 +170,111 @@ class TestWriteContextMarkdown:
         assert "screenshot_00_00_05_200.png" in md
         assert "visual change" in md.lower() or "visual_change" in md
         assert "Look at this chart" in md
+
+    def test_screenshots_injected_inline_with_transcript(self, tmp_path: Path) -> None:
+        """Screenshots should be inserted between transcript segments at the
+        chronological position matching their timestamp."""
+        ctx = {
+            "video": {"filename": "demo.mp4", "duration_s": 30.0, "total_screenshots": 2},
+            "screenshots": [
+                {
+                    "id": 1,
+                    "file": "screenshot_00_00_06_000.jpg",
+                    "timestamp_s": 6.0,
+                    "timestamp": "00:00:06.000",
+                    "trigger": "visual_change",
+                    "change_magnitude": "major",
+                    "seconds_since_prev_screenshot": None,
+                    "transcript_ids": [1],
+                },
+                {
+                    "id": 2,
+                    "file": "screenshot_00_00_15_000.jpg",
+                    "timestamp_s": 15.0,
+                    "timestamp": "00:00:15.000",
+                    "trigger": "visual_change",
+                    "change_magnitude": "minor",
+                    "seconds_since_prev_screenshot": 9.0,
+                    "transcript_ids": [],
+                },
+            ],
+            "transcript": [
+                {
+                    "id": 1,
+                    "start_s": 0.0,
+                    "end_s": 5.0,
+                    "start": "00:00:00.000",
+                    "end": "00:00:05.000",
+                    "text": "First line spoken",
+                    "screenshot_ids": [],
+                },
+                {
+                    "id": 2,
+                    "start_s": 10.0,
+                    "end_s": 14.0,
+                    "start": "00:00:10.000",
+                    "end": "00:00:14.000",
+                    "text": "Second line spoken",
+                    "screenshot_ids": [],
+                },
+                {
+                    "id": 3,
+                    "start_s": 20.0,
+                    "end_s": 25.0,
+                    "start": "00:00:20.000",
+                    "end": "00:00:25.000",
+                    "text": "Third line spoken",
+                    "screenshot_ids": [],
+                },
+            ],
+        }
+        out_path = tmp_path / "context.md"
+        write_context_markdown(ctx, out_path)
+
+        md = out_path.read_text()
+        # Order should be: seg1 -> shot1 -> seg2 -> shot2 -> seg3
+        first_line = md.find("First line spoken")
+        shot1 = md.find("Screenshot 1")
+        second_line = md.find("Second line spoken")
+        shot2 = md.find("Screenshot 2")
+        third_line = md.find("Third line spoken")
+
+        assert -1 < first_line < shot1 < second_line < shot2 < third_line, (
+            f"unexpected order in markdown:\n{md}"
+        )
+
+    def test_screenshots_only_when_no_transcript(self, tmp_path: Path) -> None:
+        """With no transcript, screenshots should still be emitted in order."""
+        ctx = {
+            "video": {"filename": "demo.mp4", "duration_s": 10.0, "total_screenshots": 2},
+            "screenshots": [
+                {
+                    "id": 1,
+                    "file": "screenshot_00_00_02_000.jpg",
+                    "timestamp_s": 2.0,
+                    "timestamp": "00:00:02.000",
+                    "trigger": "visual_change",
+                    "change_magnitude": "major",
+                    "seconds_since_prev_screenshot": None,
+                    "transcript_ids": [],
+                },
+                {
+                    "id": 2,
+                    "file": "screenshot_00_00_07_000.jpg",
+                    "timestamp_s": 7.0,
+                    "timestamp": "00:00:07.000",
+                    "trigger": "visual_change",
+                    "change_magnitude": "minor",
+                    "seconds_since_prev_screenshot": 5.0,
+                    "transcript_ids": [],
+                },
+            ],
+            "transcript": [],
+        }
+        out_path = tmp_path / "context.md"
+        write_context_markdown(ctx, out_path)
+
+        md = out_path.read_text()
+        s1 = md.find("Screenshot 1")
+        s2 = md.find("Screenshot 2")
+        assert -1 < s1 < s2
