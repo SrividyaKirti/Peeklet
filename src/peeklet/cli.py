@@ -136,6 +136,12 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
         click.echo(f"No video files found in {input_path}")
         return
 
+    if len(video_files) > 1 and config.video.transcript_path:
+        raise click.UsageError(
+            "--transcript can only be used with a single video file, "
+            f"not a directory of {len(video_files)} videos."
+        )
+
     click.echo(f"Processing {len(video_files)} video(s)")
 
     output_dir = Path(config.exporter.output_dir)

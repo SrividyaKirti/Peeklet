@@ -243,3 +243,34 @@ class TestVideoCliDetection:
         assert "transcript trigger" in result.output.lower()
         assert (output_dir / "context.json").exists()
         assert (output_dir / "context.md").exists()
+
+    def test_directory_with_transcript_errors(self, tmp_path: Path) -> None:
+        """CLI errors when --transcript is used with a directory of videos."""
+        import imageio.v3 as iio
+
+        for name in ["a.mp4", "b.mp4"]:
+            video_path = tmp_path / name
+            frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
+            with iio.imopen(video_path, "w", plugin="pyav") as out:
+                out.init_video_stream("libx264", fps=10)
+                for f in frames:
+                    out.write_frame(f)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "output"),
+                "--transcript",
+                str(srt_path),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "transcript" in result.output.lower()
+        assert "single video" in result.output.lower()
