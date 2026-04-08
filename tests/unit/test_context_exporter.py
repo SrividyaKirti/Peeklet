@@ -100,6 +100,23 @@ class TestBuildContext:
         ctx = build_context("demo.mp4", 60.0, results, [])
         assert ctx["screenshots"][0]["transcript_ids"] == []
 
+    def test_filters_non_keyframes(self) -> None:
+        """build_context should ignore FrameResult entries with is_keyframe=False."""
+        keyframe = self._make_keyframe_result("kf", 5.0)
+        skipped = FrameResult(
+            frame_id="skipped",
+            event_type=EventType.SKIPPED,
+            is_keyframe=False,
+            perceptual_hash="abc",
+            frame_width=1920,
+            frame_height=1080,
+            video_timestamp=10.0,
+        )
+        ctx = build_context("demo.mp4", 60.0, [keyframe, skipped], [])
+        assert ctx["video"]["total_screenshots"] == 1
+        assert len(ctx["screenshots"]) == 1
+        assert ctx["screenshots"][0]["id"] == 1
+
 
 class TestWriteContextJson:
     def test_writes_valid_json(self, tmp_path: Path) -> None:

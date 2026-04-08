@@ -46,8 +46,8 @@ def build_context(
                 "file": f"{timestamp_filename(ts)}.png",
                 "timestamp_s": ts,
                 "timestamp": format_timestamp(ts),
-                "trigger": r.trigger_type or "visual_change",
-                "change_magnitude": r.change_magnitude or "major",
+                "trigger": r.trigger_type,
+                "change_magnitude": r.change_magnitude,
                 "seconds_since_prev_screenshot": since_prev,
                 "transcript_ids": [],
             }
@@ -85,11 +85,11 @@ def build_context(
     }
 
 
-def write_context_json(ctx: dict[str, Any], path: Path) -> None:
+def write_context_json(ctx: dict[str, Any], path: Path | str) -> None:
     """Write context data as JSON."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ctx, indent=2, ensure_ascii=False))
+    path.write_text(json.dumps(ctx, indent=2, ensure_ascii=False) + "\n")
 
 
 def _format_duration(seconds: float) -> str:
@@ -106,7 +106,7 @@ def _format_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def write_context_markdown(ctx: dict[str, Any], path: Path) -> None:
+def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
     """Write context data as Markdown with inline image references."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
