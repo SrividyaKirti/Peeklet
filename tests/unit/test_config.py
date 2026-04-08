@@ -26,7 +26,7 @@ class TestDefaults:
         assert config.masking.noise_threshold == 0.8
         assert config.hasher.algorithm == "phash"
         assert config.comparator.ssim_threshold == 0.85
-        assert config.exporter.keyframe_format == "png"
+        assert config.exporter.keyframe_format == "jpg"
         assert config.exporter.parquet_compression == "snappy"
 
     def test_pipeline_defaults(self) -> None:

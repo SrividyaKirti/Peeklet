@@ -40,10 +40,12 @@ def build_context(
     for i, r in enumerate(keyframes):
         ts = r.video_timestamp or 0.0
         since_prev = (ts - prev_ts) if prev_ts is not None else None
+        # Derive filename from the actual asset_path (handles png/jpg/etc)
+        file_name = Path(r.asset_path).name if r.asset_path else f"{timestamp_filename(ts)}.jpg"
         screenshots.append(
             {
                 "id": i + 1,
-                "file": f"{timestamp_filename(ts)}.png",
+                "file": file_name,
                 "timestamp_s": ts,
                 "timestamp": format_timestamp(ts),
                 "trigger": r.trigger_type,
