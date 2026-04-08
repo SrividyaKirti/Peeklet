@@ -126,6 +126,7 @@ class TestManifestVideoColumns:
             total_keyframes=42,
             video_duration=120.0,
             change_magnitude="major",
+            trigger_type="visual_change",
         )
         writer.append(result)
         writer.flush()
@@ -144,6 +145,7 @@ class TestManifestVideoColumns:
             "total_keyframes": 42,
             "video_duration": 120.0,
             "change_magnitude": "major",
+            "trigger_type": "visual_change",
         }
         for col, expected_val in expected.items():
             assert col in table.column_names, f"Column '{col}' missing from manifest"
@@ -179,6 +181,7 @@ class TestManifestVideoColumns:
             "total_keyframes",
             "video_duration",
             "change_magnitude",
+            "trigger_type",
         ]
         for col in video_columns:
             assert col in table.column_names, f"Column '{col}' missing from manifest"
