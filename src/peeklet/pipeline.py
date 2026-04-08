@@ -136,8 +136,11 @@ class Pipeline:
         """
         h, w = frame.shape[:2]
 
-        # Step 1: Apply adaptive mask
-        masked_frame, mask_regions = self._mask.apply(frame)
+        # Step 1: Apply adaptive mask (or skip if disabled)
+        if self._config.masking.enabled:
+            masked_frame, mask_regions = self._mask.apply(frame)
+        else:
+            masked_frame, mask_regions = frame, []
 
         # Step 2: Compute perceptual hash — tiled for tall images
         is_tall = h > w * self._config.hasher.tile_aspect_ratio
@@ -361,7 +364,10 @@ class Pipeline:
         h, w = frame.shape[:2]
 
         # Step 1: Apply adaptive mask (mirrors process_frame)
-        masked_frame, _ = self._mask.apply(frame)
+        if self._config.masking.enabled:
+            masked_frame, _ = self._mask.apply(frame)
+        else:
+            masked_frame = frame
 
         # Step 2: Compute perceptual hash — tiled for tall images
         is_tall = h > w * self._config.hasher.tile_aspect_ratio

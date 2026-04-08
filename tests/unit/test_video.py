@@ -79,7 +79,7 @@ class TestCoarseExtraction:
 
 
 class TestSmartSampling:
-    def test_backfill_finds_transition(self, tmp_path: Path) -> None:
+    def test_coarse_sampling_finds_transition(self, tmp_path: Path) -> None:
         # 3 seconds: 1.5s black, then 1.5s white (sharp transition at frame 45)
         frames = [_solid_frame((0, 0, 0))] * 45 + [_solid_frame((255, 255, 255))] * 45
         video_path = _make_test_video(tmp_path / "test.mp4", frames, fps=30)
@@ -90,14 +90,11 @@ class TestSmartSampling:
         results = process_video(video_path, config)
         keyframes = [r for r in results if r.is_keyframe]
 
-        # Should find at least 2 keyframes: first frame + the transition
+        # Should find at least 2 keyframes: first frame + the transition.
+        # With coarse-only sampling at 1fps, the transition lands on the next
+        # coarse sample boundary (±1s precision is fine for LLM use).
         assert len(keyframes) >= 2
-        # First keyframe is always frame 0
         assert keyframes[0].video_frame_number == 0
-        # Second keyframe should be near frame 45 (the transition),
-        # not at frame 60 (the next coarse sample)
-        assert keyframes[1].video_frame_number is not None
-        assert keyframes[1].video_frame_number < 60
 
     def test_no_backfill_when_no_transitions(self, tmp_path: Path) -> None:
         # 2 seconds of solid red — no transitions

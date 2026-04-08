@@ -79,7 +79,7 @@ class TestPipelineBatch:
         pipeline.process_frame(frame_b, frame_id="frame_001")
         pipeline.finalize()
 
-        keyframes = list(tmp_output.glob("*.png"))
+        keyframes = list(tmp_output.glob("*.jpg")) + list(tmp_output.glob("*.png"))
         assert len(keyframes) == 2
 
     def test_cascade_skips_comparator_on_hash_match(

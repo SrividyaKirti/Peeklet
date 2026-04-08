@@ -81,7 +81,9 @@ class TestVideoEndToEnd:
 
         # Check keyframe images exist
         output_dir = tmp_path / "output"
-        keyframe_images = list(output_dir.glob("screenshot_*.png"))
+        keyframe_images = list(output_dir.glob("screenshot_*.jpg")) + list(
+            output_dir.glob("screenshot_*.png")
+        )
         assert len(keyframe_images) >= 2
 
     def test_video_with_transcript(self, tmp_path: Path) -> None:

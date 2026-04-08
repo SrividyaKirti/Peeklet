@@ -27,6 +27,7 @@ class PipelineConfig(BaseModel):
 class MaskingConfig(BaseModel):
     """Adaptive masking settings."""
 
+    enabled: bool = True
     block_size: int = Field(default=32, gt=0)
     window_size: int = Field(default=15, gt=0)
     noise_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
@@ -52,7 +53,9 @@ class ExporterConfig(BaseModel):
     """Export settings."""
 
     output_dir: str = "./output"
-    keyframe_format: Literal["png", "jpg"] = "png"
+    # JPEG default — ~5x faster to encode than PNG and ~10x smaller on disk,
+    # which matters at scale and is fine for downstream LLM consumption.
+    keyframe_format: Literal["png", "jpg"] = "jpg"
     parquet_compression: Literal["snappy", "gzip", "zstd", "none"] = "snappy"
 
 
@@ -72,6 +75,9 @@ class VideoConfig(BaseModel):
     formats: list[str] = Field(default_factory=lambda: ["mp4", "mov", "webm"])
     audio_detection: bool = True
     transcript_path: str | None = None
+    # Performance: downscale frames before pipeline processing. None = no downscale.
+    # Saved keyframe images are at the downscaled resolution.
+    processing_max_dim: int | None = Field(default=720, gt=0)
 
 
 class PeekletConfig(BaseModel):
