@@ -111,8 +111,19 @@ def main(
 
 def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> None:
     """Process video file(s)."""
+    from peeklet.core.audio import parse_transcript
     from peeklet.core.exporter import ManifestWriter
+    from peeklet.core.transcript_trigger import detect_triggers
     from peeklet.core.video import process_video
+
+    # Detect transcript triggers if transcript is provided
+    forced_timestamps: list[float] = []
+    if config.video.transcript_path:
+        segments = parse_transcript(Path(config.video.transcript_path))
+        triggers = detect_triggers(segments)
+        forced_timestamps = [t.timestamp for t in triggers]
+        if triggers:
+            click.echo(f"Found {len(triggers)} transcript trigger(s)")
 
     if input_path.is_file():
         video_files = [input_path]
@@ -136,17 +147,17 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
     total_keyframes = 0
     for vf in video_files:
         click.echo(f"  Processing: {vf.name}")
-        results = process_video(vf, config, writer=writer)
+        results = process_video(vf, config, writer=writer, forced_timestamps=forced_timestamps)
         kf_count = sum(1 for r in results if r.is_keyframe)
         total_keyframes += kf_count
         click.echo(f"    {kf_count} keyframes extracted")
 
     writer.flush()
 
-    output_dir = Path(config.exporter.output_dir)
     click.echo(
         f"Done: {total_keyframes} total keyframes. Manifest: {output_dir / 'manifest.parquet'}"
     )
+    click.echo(f"Context: {output_dir / 'context.json'}, {output_dir / 'context.md'}")
 
 
 def _run_image_mode(
