@@ -131,3 +131,78 @@ class TestVideoEndToEnd:
         videos = {r.source_video for r in all_results if r.source_video}
         assert "a.mp4" in videos
         assert "b.mp4" in videos
+
+
+class TestVideoContextExport:
+    def test_video_with_transcript_produces_context_files(self, tmp_path: Path) -> None:
+        """Video + transcript -> context.json + context.md + timestamped screenshots."""
+        frames = [_solid_frame((0, 0, 0))] * 45 + [_solid_frame((255, 255, 255))] * 45
+        video_path = _make_test_video(tmp_path / "demo.mp4", frames, fps=30)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text(
+            "1\n"
+            "00:00:00,000 --> 00:00:01,000\n"
+            "Welcome to the demo\n"
+            "\n"
+            "2\n"
+            "00:00:01,000 --> 00:00:02,500\n"
+            "Look at this dashboard here\n"
+            "\n"
+        )
+
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+        config.video.transcript_path = str(srt_path)
+
+        from peeklet.core.audio import parse_transcript
+        from peeklet.core.transcript_trigger import detect_triggers
+
+        segments = parse_transcript(srt_path)
+        triggers = detect_triggers(segments)
+        forced_timestamps = [t.timestamp for t in triggers]
+
+        process_video(video_path, config, forced_timestamps=forced_timestamps)
+
+        output_dir = tmp_path / "output"
+
+        # Context files exist
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()
+
+        # JSON is valid and has expected structure
+        import json
+
+        ctx = json.loads((output_dir / "context.json").read_text())
+        assert ctx["video"]["filename"] == "demo.mp4"
+        assert ctx["video"]["total_screenshots"] >= 1
+        assert len(ctx["screenshots"]) >= 1
+
+        # Screenshots use timestamp-based naming
+        for s in ctx["screenshots"]:
+            assert s["file"].startswith("screenshot_")
+            assert (output_dir / s["file"]).exists()
+
+        # Markdown references screenshots
+        md = (output_dir / "context.md").read_text()
+        assert "# Video Summary: demo.mp4" in md
+
+    def test_video_without_transcript_still_produces_context(self, tmp_path: Path) -> None:
+        """Video without transcript still produces context.json + context.md."""
+        frames = [_solid_frame((0, 0, 0))] * 30 + [_solid_frame((255, 255, 255))] * 30
+        video_path = _make_test_video(tmp_path / "demo.mp4", frames, fps=30)
+
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+
+        process_video(video_path, config)
+
+        output_dir = tmp_path / "output"
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()
+
+        import json
+
+        ctx = json.loads((output_dir / "context.json").read_text())
+        assert ctx["transcript"] == []
+        assert ctx["video"]["total_screenshots"] >= 1
