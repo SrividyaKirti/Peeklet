@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
-Smart screenshot change detection. Filters noise, exports structured Parquet manifests of keyframes.
+Smart screenshot change detection. Filters noise, exports structured Parquet manifests of keyframes with LLM-ready context output.
 
 Given a stream of screenshots captured every few seconds, Peeklet determines which frames represent meaningful changes (keyframes) and which are noise (cursor blinks, clock ticks, video playback). It reduces downstream OCR/LLM processing costs by 80-90%.
 
@@ -13,6 +13,8 @@ Given a stream of screenshots captured every few seconds, Peeklet determines whi
 - **Cascade filtering** -- perceptual hashing, SSIM, and adaptive masking eliminate duplicate and noisy frames early
 - **Adaptive masking** -- auto-detects and ignores high-frequency change regions (video players, ads, clocks)
 - **Video support** -- two-pass smart sampling with audio/transcript alignment
+- **LLM-ready context export** -- JSON + Markdown output with bidirectional transcript/screenshot linking
+- **Transcript trigger detection** -- automatically captures screenshots when presenter references the screen
 - **Parquet export** -- DuckDB-ready manifests with per-frame metadata and keyframe linking
 - **Zero-config defaults** -- works out of the box, fully tunable via JSON/YAML
 
@@ -42,6 +44,9 @@ peeklet --input ./screenshots --output ./output
 
 # Process a video file
 peeklet --input recording.mp4 --output ./output
+
+# Process video with transcript (produces JSON + Markdown context)
+peeklet --input recording.mp4 --output ./output --transcript captions.srt
 
 # Use a config file
 peeklet --input ./screenshots --output ./output --config config.yaml
