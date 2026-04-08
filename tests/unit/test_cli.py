@@ -208,3 +208,38 @@ class TestVideoCliDetection:
             ],
         )
         assert result.exit_code == 0
+
+    def test_video_with_transcript_full_cli_flow(self, tmp_path: Path) -> None:
+        """CLI processes video + transcript and produces context files."""
+        import imageio.v3 as iio
+
+        video_path = tmp_path / "demo.mp4"
+        # Two solid color frames - guarantees one visual change keyframe
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 30 + [
+            np.full((60, 80, 3), 255, dtype=np.uint8)
+        ] * 30
+        with iio.imopen(video_path, "w", plugin="pyav") as out:
+            out.init_video_stream("libx264", fps=30)
+            for f in frames:
+                out.write_frame(f)
+
+        srt_path = tmp_path / "transcript.srt"
+        srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nLook at this dashboard here\n\n")
+
+        output_dir = tmp_path / "output"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(video_path),
+                "--output",
+                str(output_dir),
+                "--transcript",
+                str(srt_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "transcript trigger" in result.output.lower()
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()

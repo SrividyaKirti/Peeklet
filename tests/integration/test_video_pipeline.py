@@ -1,5 +1,6 @@
 """Integration tests for video input end-to-end."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -171,8 +172,6 @@ class TestVideoContextExport:
         assert (output_dir / "context.md").exists()
 
         # JSON is valid and has expected structure
-        import json
-
         ctx = json.loads((output_dir / "context.json").read_text())
         assert ctx["video"]["filename"] == "demo.mp4"
         assert ctx["video"]["total_screenshots"] >= 1
@@ -182,6 +181,15 @@ class TestVideoContextExport:
         for s in ctx["screenshots"]:
             assert s["file"].startswith("screenshot_")
             assert (output_dir / s["file"]).exists()
+
+        # At least one screenshot should be triggered by transcript (or both)
+        triggered_screenshots = [
+            s for s in ctx["screenshots"] if s["trigger"] in ("transcript_trigger", "both")
+        ]
+        assert len(triggered_screenshots) >= 1, (
+            f"Expected at least one transcript-triggered screenshot, got triggers: "
+            f"{[s['trigger'] for s in ctx['screenshots']]}"
+        )
 
         # Markdown references screenshots
         md = (output_dir / "context.md").read_text()
@@ -200,8 +208,6 @@ class TestVideoContextExport:
         output_dir = tmp_path / "output"
         assert (output_dir / "context.json").exists()
         assert (output_dir / "context.md").exists()
-
-        import json
 
         ctx = json.loads((output_dir / "context.json").read_text())
         assert ctx["transcript"] == []
