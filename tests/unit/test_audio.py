@@ -74,6 +74,80 @@ class TestParseVtt:
         assert segments[0].text == "First line"
 
 
+class TestParseFathomMd:
+    def test_parse_basic_fathom_md(self, tmp_path: Path) -> None:
+        md = tmp_path / "test.md"
+        md.write_text(
+            "## Some Title\n"
+            "\n"
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.56)++ - **Alice**  \n"
+            "Welcome everyone.  \n"
+            "\n"
+            "++[@0:03](https://fathom.video/calls/1?timestamp=3.0)++ - **Bob**  \n"
+            "Thanks for having me.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].start == 0.56
+        assert segments[0].end == 3.0
+        assert segments[0].text == "Welcome everyone."
+        assert segments[1].start == 3.0
+        assert segments[1].text == "Thanks for having me."
+
+    def test_duplicate_timestamp_lines_dedupe(self, tmp_path: Path) -> None:
+        # Fathom often emits the speaker line twice in a row
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.5)++ - **Alice**  \n"
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.5)++ - **Alice**  \n"
+            "Hello world.  \n"
+            "\n"
+            "++[@0:05](https://fathom.video/calls/1?timestamp=5.2)++ - **Bob**  \n"
+            "Yes, indeed.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].text == "Hello world."
+        assert segments[1].text == "Yes, indeed."
+
+    def test_multiline_segment(self, tmp_path: Path) -> None:
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Line one of the segment.  \n"
+            "Line two of the same segment.  \n"
+            "\n"
+            "++[@0:10](https://fathom.video/calls/1?timestamp=10.0)++ - **Bob**  \n"
+            "Next.  \n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert "Line one of the segment." in segments[0].text
+        assert "Line two of the same segment." in segments[0].text
+
+    def test_inline_watch_marker_does_not_split(self, tmp_path: Path) -> None:
+        # An action-item line embeds [WATCH](...?timestamp=...) inside speech.
+        # That must not split the segment.
+        md = tmp_path / "test.md"
+        watch_line = (
+            "**ACTION ITEM: do thing - "
+            "++[WATCH](https://fathom.video/calls/1?timestamp=361.99)++**  \n"
+        )
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Some speech that mentions a " + watch_line + "and continues.  \n"
+            "\n"
+            "++[@0:10](https://fathom.video/calls/1?timestamp=10.0)++ - **Bob**  \n"
+            "Next.  \n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].start == 0.0
+        assert "ACTION ITEM" in segments[0].text
+
+
 class TestAlignTranscript:
     def test_align_finds_overlapping_segment(self) -> None:
         segments = [

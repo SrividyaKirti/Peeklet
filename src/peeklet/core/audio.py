@@ -17,9 +17,13 @@ class TranscriptSegment:
 
 
 def parse_transcript(path: Path) -> list[TranscriptSegment]:
-    """Parse an SRT or VTT file into timestamped segments.
+    """Parse a transcript file into timestamped segments.
 
-    Auto-detects format by file extension (.srt or .vtt).
+    Auto-detects format by file extension:
+    - ``.srt`` — SubRip
+    - ``.vtt`` — WebVTT
+    - ``.md`` — Fathom-style markdown (lines like
+      ``++[@MM:SS](url?timestamp=N.NN)++ - **Speaker**`` followed by spoken text)
     """
     path = Path(path)
     text = path.read_text(encoding="utf-8").strip()
@@ -29,6 +33,8 @@ def parse_transcript(path: Path) -> list[TranscriptSegment]:
     suffix = path.suffix.lower()
     if suffix == ".vtt":
         return _parse_vtt(text)
+    if suffix == ".md":
+        return _parse_fathom_md(text)
     return _parse_srt(text)
 
 
@@ -64,6 +70,64 @@ def _parse_srt(text: str) -> list[TranscriptSegment]:
         end = _parse_timestamp(match.group(2))
         text_lines = lines[timestamp_line_idx + 1 :]
         content = " ".join(line.strip() for line in text_lines if line.strip())
+        if content:
+            segments.append(TranscriptSegment(start=start, end=end, text=content))
+    return segments
+
+
+# Fathom-style markdown timestamp line:
+#   ++[@0:03](https://fathom.video/calls/123?timestamp=3.0)++ - **Speaker Name**
+# We anchor at the start of the line and require the trailing speaker block,
+# so embedded ``[WATCH](...?timestamp=...)`` markers inside speech text don't
+# falsely split segments.
+_FATHOM_TS_LINE_RE = re.compile(
+    r"^\s*\+\+\[@\d+:\d+\]\([^)]*\?timestamp=(\d+(?:\.\d+)?)\)\+\+\s*-\s*\*\*[^*]+\*\*\s*$"
+)
+
+
+def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
+    """Parse a Fathom-style markdown transcript.
+
+    Each segment looks like::
+
+        ++[@0:03](https://fathom.video/calls/123?timestamp=3.0)++ - **Speaker**
+        Spoken text here, possibly across
+        multiple lines until a blank line or the next timestamp marker.
+
+    The numeric ``?timestamp=`` value is used for the start time (more
+    precise than the visible ``MM:SS``). The end time of each segment is
+    inferred from the start of the next segment.
+    """
+    raw_segments: list[tuple[float, list[str]]] = []
+    current_start: float | None = None
+    current_lines: list[str] = []
+
+    for line in text.splitlines():
+        match = _FATHOM_TS_LINE_RE.match(line)
+        if match:
+            ts = float(match.group(1))
+            # Skip duplicate timestamp lines (Fathom often emits two in a row)
+            if current_start is not None and ts == current_start and not current_lines:
+                continue
+            # Flush previous segment
+            if current_start is not None and current_lines:
+                raw_segments.append((current_start, current_lines))
+            current_start = ts
+            current_lines = []
+            continue
+        if current_start is None:
+            continue  # skip frontmatter before the first timestamp
+        stripped = line.strip()
+        if stripped:
+            current_lines.append(stripped)
+
+    if current_start is not None and current_lines:
+        raw_segments.append((current_start, current_lines))
+
+    segments: list[TranscriptSegment] = []
+    for i, (start, lines) in enumerate(raw_segments):
+        end = raw_segments[i + 1][0] if i + 1 < len(raw_segments) else start + 5.0
+        content = " ".join(lines).strip()
         if content:
             segments.append(TranscriptSegment(start=start, end=end, text=content))
     return segments
