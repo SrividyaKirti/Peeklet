@@ -74,3 +74,19 @@ class TestDetectTriggers:
         ]
         triggers = detect_triggers(segments)
         assert len(triggers) == 1
+
+    def test_single_high_no_medium_no_trigger(self) -> None:
+        """Single high-signal word alone (no medium) = no trigger."""
+        segments = [
+            TranscriptSegment(start=0.0, end=3.0, text="The chart grows"),
+        ]
+        triggers = detect_triggers(segments)
+        assert len(triggers) == 0
+
+    def test_punctuation_attached_to_keywords(self) -> None:
+        """Words with attached punctuation should still match."""
+        segments = [
+            TranscriptSegment(start=0.0, end=3.0, text="Look at this dashboard, here it is."),
+        ]
+        triggers = detect_triggers(segments)
+        assert len(triggers) == 1

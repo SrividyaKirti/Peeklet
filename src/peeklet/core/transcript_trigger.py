@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -68,14 +69,12 @@ class TriggerResult:
 
 def _is_trigger(text: str) -> bool:
     """Check if text contains enough signal words to trigger a keyframe."""
-    words = set(text.lower().split())
-    has_high = bool(words & HIGH_SIGNAL_WORDS)
+    words = set(re.sub(r"[^\w\s]", " ", text.lower()).split())
+    high_matches = words & HIGH_SIGNAL_WORDS
     has_medium = bool(words & MEDIUM_SIGNAL_WORDS)
-    high_count = len(words & HIGH_SIGNAL_WORDS)
-
-    if has_high and has_medium:
+    if high_matches and has_medium:
         return True
-    return high_count >= 2
+    return len(high_matches) >= 2
 
 
 def detect_triggers(segments: list[TranscriptSegment]) -> list[TriggerResult]:
