@@ -148,6 +148,24 @@ def _change_magnitude(result: FrameResult) -> str:
     return "minor"
 
 
+def _should_force_keyframe(
+    timestamp: float, forced_timestamps: list[float], tolerance: float = 0.5
+) -> bool:
+    """Check if a frame timestamp is close enough to a forced timestamp."""
+    return any(abs(timestamp - ft) <= tolerance for ft in forced_timestamps)
+
+
+def _merge_trigger_type(is_visual: bool, is_transcript: bool) -> str | None:
+    """Determine trigger_type from visual and transcript flags."""
+    if is_visual and is_transcript:
+        return "both"
+    if is_visual:
+        return "visual_change"
+    if is_transcript:
+        return "transcript_trigger"
+    return None
+
+
 def process_video(
     path: Path,
     config: PeekletConfig,
