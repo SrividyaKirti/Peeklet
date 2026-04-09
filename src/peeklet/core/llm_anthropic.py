@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 try:
     import anthropic
 except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
-    anthropic = None  # type: ignore[assignment]
+    anthropic = None
 
 _MAX_TOKENS = 4096
 

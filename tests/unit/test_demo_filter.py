@@ -2,13 +2,47 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 
 def _make_frame(h: int = 360, w: int = 360) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+def _tesseract_available() -> bool:
+    """True iff the tesseract binary is callable. Used to gate real-OCR tests."""
+    try:
+        import pytesseract
+
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
+def _render_text_frame(words: list[str], width: int = 1280, height: int = 720) -> np.ndarray:
+    """Render a high-contrast frame with the given words drawn in large text.
+
+    Used to feed real OCR a deterministic image with a known word count
+    without needing a video fixture in the repo.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (width, height), color="white")
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
+    except OSError:
+        font = ImageFont.load_default()
+    y = 40
+    for word in words:
+        draw.text((40, y), word, fill="black", font=font)
+        y += 60
+    return np.asarray(img)
 
 
 def test_count_words_filters_low_confidence_and_short_tokens():
@@ -347,3 +381,97 @@ def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, c
 
     assert results == []
     assert any("zero screenshot-worthy moments" in rec.message for rec in caplog.records)
+
+
+# --- Regression tests for the demo-mode gallery-check bugs surfaced
+# while testing against the UI_enhancements_Apr12026.mp4 sample. ---
+
+
+def test_demo_filter_config_has_gallery_ocr_min_dim_default_at_least_1280():
+    """Bug 3 regression: OCR needs near-source resolution to read screen-share text.
+
+    Reusing ``frame_search_resolution`` (240/360/540 across quality presets) for
+    OCR downscaling destroys text before Tesseract sees it on any 720p source.
+    The dedicated gallery_ocr_min_dim must default to at least 1280 so a 720p
+    frame is left untouched.
+    """
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert hasattr(cfg, "gallery_ocr_min_dim"), (
+        "DemoFilterConfig should expose gallery_ocr_min_dim independent of "
+        "frame_search_resolution so OCR can run at near-source resolution."
+    )
+    assert cfg.gallery_ocr_min_dim >= 1280
+
+
+def test_is_gallery_frame_returns_false_when_pytesseract_unavailable():
+    """Bug 2 regression: missing OCR must not silently reject every frame.
+
+    When pytesseract is unavailable we cannot determine whether a frame is
+    gallery view, so the safe default is to let the frame through and let the
+    LLM-picked moment win. The previous behavior returned True (== gallery)
+    for every frame because ``_count_words_in_frame`` returned 0 < min_words.
+    """
+    from peeklet.core.demo_filter import _is_gallery_frame
+
+    frame = _make_frame(h=720, w=1280)
+    with patch("peeklet.core.demo_filter.pytesseract", None):
+        assert _is_gallery_frame(frame, downscale_dim=1920, min_words=5) is False
+
+
+@pytest.mark.skipif(not _tesseract_available(), reason="tesseract binary not installed")
+def test_is_gallery_frame_accepts_real_text_frame_at_720p():
+    """Bug 3 regression: a 720p frame with clearly readable text must NOT be
+    flagged as gallery view at the default ``gallery_ocr_min_dim``.
+
+    This is the end-to-end OCR test that would have caught the silent rejection
+    of every demo frame from a 720p screen-share recording.
+    """
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.demo_filter import _is_gallery_frame
+
+    frame = _render_text_frame(
+        ["Settings", "Dashboard", "Analytics", "Users", "Tokens", "Reports", "Logout"],
+        width=1280,
+        height=720,
+    )
+    cfg = DemoFilterConfig()
+    assert (
+        _is_gallery_frame(
+            frame,
+            downscale_dim=cfg.gallery_ocr_min_dim,
+            min_words=cfg.gallery_min_words,
+        )
+        is False
+    )
+
+
+def test_apply_demo_filter_warns_when_pytesseract_unavailable(tmp_path, monkeypatch, caplog):
+    """Bug 2 regression: a missing OCR backend must produce a startup warning,
+    not a silent zero-keyframes run.
+    """
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.demo_filter import apply_demo_filter
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = []
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", None)
+
+    cfg = DemoFilterConfig(enabled=True)
+    with caplog.at_level(logging.WARNING):
+        apply_demo_filter(
+            decoder=decoder,
+            transcript=[],
+            config=cfg,
+            output_dir=tmp_path,
+        )
+
+    assert any(
+        "OCR" in rec.message and "gallery" in rec.message.lower() for rec in caplog.records
+    ), f"expected an OCR-unavailable warning, got: {[r.message for r in caplog.records]}"

@@ -101,6 +101,13 @@ class DemoFilterConfig(BaseModel):
     forward_search_window_max_sec: float = Field(default=5.0, gt=0.0)
     # Gallery detection (reuses _count_words_in_frame)
     gallery_min_words: int = Field(default=5, ge=0)
+    # Minimum longest-edge resolution for OCR. Frames are downscaled only if
+    # they exceed this value, so OCR runs at near-source resolution. Reusing
+    # ``frame_search_resolution`` (which can be 240–540 under quality presets)
+    # destroys text before Tesseract sees it on 720p+ screen-share recordings,
+    # silently flagging every demo frame as gallery view. Default 1920 leaves
+    # 1080p and smaller frames untouched and downscales 4K to 1920 wide.
+    gallery_ocr_min_dim: int = Field(default=1920, gt=0)
 
 
 class PeekletConfig(BaseModel):
