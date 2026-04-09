@@ -122,7 +122,15 @@ def _is_stable(
 
 
 def _is_gallery_frame(frame: np.ndarray, downscale_dim: int, min_words: int) -> bool:
-    """Return True if the frame has too few visible words to be demo content."""
+    """Return True if the frame has too few visible words to be demo content.
+
+    When OCR is unavailable we cannot tell whether the frame is gallery view,
+    so we return False (let the LLM-picked frame through). Returning True here
+    would silently reject every frame and produce a zero-keyframe run with no
+    indication that OCR was the cause.
+    """
+    if pytesseract is None:
+        return False
     return _count_words_in_frame(frame, downscale_dim) < min_words
 
 
@@ -234,7 +242,7 @@ def select_frames_for_moments(
 
         if _is_gallery_frame(
             picked_frame,
-            downscale_dim=config.frame_search_resolution,
+            downscale_dim=config.gallery_ocr_min_dim,
             min_words=config.gallery_min_words,
         ):
             logger.warning(
@@ -287,6 +295,13 @@ def apply_demo_filter(
     transcript, then runs Stage B (forward-search + stability + gallery check)
     to pick the actual frames. Returns the curated keyframe list.
     """
+    if pytesseract is None:
+        logger.warning(
+            "pytesseract is not installed — the gallery check is disabled and "
+            "every LLM-picked frame will be saved without OCR filtering. "
+            "Install with: pip install peeklet[demo]"
+        )
+
     meta = decoder.get_metadata()
     client = build_llm_client(provider=config.llm_provider, model=config.llm_model)
 

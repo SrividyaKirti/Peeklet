@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 try:
     import openai
 except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
-    openai = None  # type: ignore[assignment]
+    openai = None  # type: ignore[assignment, unused-ignore]
 
 
 def _call_openai_chat_with_retry(
