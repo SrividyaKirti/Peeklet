@@ -201,6 +201,48 @@ class VideoDecoder:
 
         container.close()
 
+    def extract_frame_at(self, timestamp_sec: float) -> tuple[np.ndarray, float, int]:
+        """Extract a single frame at (or just after) ``timestamp_sec``.
+
+        Seeks to the nearest keyframe before the requested timestamp via
+        libav and decodes forward until a frame at-or-past the target is
+        found. Returns ``(frame_rgb, actual_timestamp, frame_number)``.
+
+        Used by demo-mode's sparse OCR sweep where we only need a few
+        frames spread across the video, not a continuous range.
+
+        Raises:
+            RuntimeError: if no frame can be decoded at or after the
+                requested timestamp (e.g., timestamp past end of video).
+        """
+        import av
+
+        container = av.open(str(self._path))
+        try:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+
+            target_ts = int(timestamp_sec * av.time_base)
+            container.seek(target_ts)
+
+            for frame in container.decode(stream):
+                if frame.pts is None or stream.time_base is None:
+                    continue
+                ts = float(frame.pts * stream.time_base)
+                if ts + 1e-6 < timestamp_sec:
+                    continue
+                arr = frame.to_ndarray(format="rgb24")
+                rgb = ensure_rgb_uint8(np.asarray(arr))
+                frame_num = int(round(ts * self._fps))
+                return rgb, ts, frame_num
+
+            raise RuntimeError(
+                f"No frame found at or after timestamp {timestamp_sec}s "
+                f"in {self._path.name} (duration={self._duration}s)"
+            )
+        finally:
+            container.close()
+
 
 def _change_magnitude(result: FrameResult) -> str:
     """Derive change magnitude from SSIM and block count."""

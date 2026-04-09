@@ -198,3 +198,23 @@ class TestAudioEnrichment:
         # First keyframe at t=0 should match first transcript segment
         assert keyframes[0].transcript_segment is not None
         assert "Welcome" in keyframes[0].transcript_segment
+
+
+def test_extract_frame_at_returns_frame_near_timestamp(tmp_path):
+    """extract_frame_at should return a frame near the requested timestamp."""
+    import numpy as np
+
+    from peeklet.core.video import VideoDecoder
+    from tests.unit.helpers_video import write_synthetic_video
+
+    # 5-second video, 10 fps, solid color frames that change every second
+    video_path = tmp_path / "synthetic.mp4"
+    write_synthetic_video(video_path, duration_sec=5, fps=10, width=64, height=64)
+
+    decoder = VideoDecoder(video_path)
+    frame, ts, frame_num = decoder.extract_frame_at(2.5)
+
+    assert isinstance(frame, np.ndarray)
+    assert frame.ndim == 3 and frame.shape[2] == 3  # HxWxC RGB
+    assert 2.0 <= ts <= 3.0  # within ±0.5s of request
+    assert frame_num >= 0
