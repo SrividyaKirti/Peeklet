@@ -379,3 +379,53 @@ def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
         "provider": "openai",
         "model": "gpt-4o-mini",
     }
+
+
+def test_cli_demo_mode_accepts_openrouter_provider(tmp_path, monkeypatch):
+    """--llm-provider openrouter is accepted by Click and propagates to config."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+
+    captured = {}
+
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["provider"] = config.demo_filter.llm_provider
+        captured["model"] = config.demo_filter.llm_model
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--transcript",
+            str(transcript),
+            "--demo-mode",
+            "--llm-provider",
+            "openrouter",
+            "--llm-model",
+            "anthropic/claude-3.5-sonnet",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "provider": "openrouter",
+        "model": "anthropic/claude-3.5-sonnet",
+    }

@@ -90,10 +90,12 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
 @click.option(
     "--llm-provider",
     "llm_provider",
-    type=click.Choice(["anthropic", "openai"]),
+    type=click.Choice(["anthropic", "openai", "openrouter"]),
     default=None,
     envvar="PEEKLET_LLM_PROVIDER",
-    help="LLM provider for --demo-mode (anthropic or openai). "
+    help="LLM provider for --demo-mode (anthropic, openai, or openrouter). "
+    "OpenRouter requires OPENROUTER_API_KEY and uses namespaced model ids "
+    "like 'anthropic/claude-3.5-sonnet'. "
     "Defaults to the value in config.demo_filter.llm_provider.",
 )
 @click.option(
