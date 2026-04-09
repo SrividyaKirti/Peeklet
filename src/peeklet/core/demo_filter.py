@@ -64,7 +64,7 @@ def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
     downscaled = _downscale_for_ocr(frame, downscale_dim)
     try:
         data = pytesseract.image_to_data(downscaled, output_type=pytesseract.Output.DICT)
-    except Exception as exc:  # pragma: no cover - mocked in tests
+    except Exception as exc:
         logger.warning("OCR failed on frame: %s", exc)
         return 0
 
