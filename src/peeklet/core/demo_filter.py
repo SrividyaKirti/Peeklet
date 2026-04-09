@@ -104,12 +104,16 @@ def _is_stable(
     nxt: np.ndarray,
     threshold: float,
 ) -> bool:
-    """Bidirectional SSIM check: a frame is stable if both neighbors are similar."""
+    """Bidirectional SSIM check: a frame is stable if both neighbors are similar.
+
+    Short-circuits the second SSIM call when the first one already disqualifies
+    the frame, since SSIM is in the Stage B hot path.
+    """
     from peeklet.core.comparator import compare_frames
 
-    prev_result = compare_frames(frame, prev)
-    next_result = compare_frames(frame, nxt)
-    return prev_result.ssim_score > threshold and next_result.ssim_score > threshold
+    if compare_frames(frame, prev).ssim_score <= threshold:
+        return False
+    return compare_frames(frame, nxt).ssim_score > threshold
 
 
 def _is_gallery_frame(frame: np.ndarray, downscale_dim: int, min_words: int) -> bool:
