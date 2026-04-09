@@ -218,3 +218,60 @@ def test_extract_frame_at_returns_frame_near_timestamp(tmp_path):
     assert frame.ndim == 3 and frame.shape[2] == 3  # HxWxC RGB
     assert 2.0 <= ts <= 3.0  # within ±0.5s of request
     assert frame_num >= 0
+
+
+def test_process_video_calls_demo_filter_when_enabled(tmp_path, monkeypatch):
+    """When config.demo_filter.enabled is True, process_video calls apply_demo_filter."""
+    from unittest.mock import MagicMock
+
+    from peeklet.config import PeekletConfig
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "synthetic.mp4"
+    write_synthetic_video(video_path, duration_sec=3, fps=10, width=64, height=64)
+
+    transcript_path = tmp_path / "transcript.srt"
+    transcript_path.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\nhello world\n\n"
+        "2\n00:00:02,000 --> 00:00:03,000\ngoodbye\n"
+    )
+
+    cfg = PeekletConfig()
+    cfg.exporter.output_dir = str(tmp_path / "out")
+    cfg.video.audio_detection = False
+    cfg.video.transcript_path = str(transcript_path)
+    cfg.demo_filter.enabled = True
+
+    fake_filtered: list = []
+    mock_apply = MagicMock(return_value=fake_filtered)
+    monkeypatch.setattr(video_module, "apply_demo_filter", mock_apply)
+
+    results = video_module.process_video(video_path, cfg)
+
+    assert mock_apply.called, "apply_demo_filter should be invoked when demo_filter.enabled"
+    assert results == fake_filtered
+
+
+def test_process_video_skips_demo_filter_when_disabled(tmp_path, monkeypatch):
+    """When demo_filter.enabled is False, apply_demo_filter is NOT called."""
+    from unittest.mock import MagicMock
+
+    from peeklet.config import PeekletConfig
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "synthetic.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    cfg = PeekletConfig()
+    cfg.exporter.output_dir = str(tmp_path / "out")
+    cfg.video.audio_detection = False
+    cfg.demo_filter.enabled = False
+
+    mock_apply = MagicMock()
+    monkeypatch.setattr(video_module, "apply_demo_filter", mock_apply)
+
+    video_module.process_video(video_path, cfg)
+
+    assert not mock_apply.called

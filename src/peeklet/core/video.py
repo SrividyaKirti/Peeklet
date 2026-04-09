@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -20,10 +21,13 @@ from peeklet.core.context_exporter import (
     write_context_json,
     write_context_markdown,
 )
+from peeklet.core.demo_filter import apply_demo_filter
 from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
 from peeklet.utils.types import EventType
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -321,6 +325,31 @@ def process_video(
             path=output_dir / "manifest.parquet",
             compression=config.exporter.parquet_compression,
         )
+
+    # Demo mode: bypass the coarse pass entirely. The LLM picks moments,
+    # Stage B picks frames, and we write outputs directly.
+    if config.demo_filter.enabled:
+        transcript_segments: list[TranscriptSegment] = []
+        if config.video.transcript_path:
+            transcript_segments = parse_transcript(Path(config.video.transcript_path))
+
+        results = apply_demo_filter(
+            decoder=decoder,
+            transcript=transcript_segments,
+            config=config.demo_filter,
+            output_dir=output_dir,
+        )
+
+        ctx = build_context(meta.filename, meta.duration, results, transcript_segments)
+        write_context_json(ctx, output_dir / "context.json")
+        write_context_markdown(ctx, output_dir / "context.md")
+
+        for r in results:
+            writer.append(r)
+        if owns_writer:
+            writer.flush()
+
+        return results
 
     # Adaptive masking is designed for screencasts (cursor/clock noise).
     # In video mode it both adds significant overhead and tends to mask out
