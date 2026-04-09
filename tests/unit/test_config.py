@@ -152,14 +152,22 @@ class TestVideoConfig:
 
 
 def test_demo_filter_config_defaults():
-    from peeklet.config import PeekletConfig
-
     cfg = PeekletConfig()
     assert cfg.demo_filter.enabled is False
-    assert cfg.demo_filter.ocr_sample_interval_sec == 30.0
-    assert cfg.demo_filter.ocr_downscale_dim == 360
-    assert cfg.demo_filter.ocr_min_words == 5
-    assert cfg.demo_filter.major_change_ssim == 0.70
-    assert cfg.demo_filter.major_change_blocks == 15
-    assert cfg.demo_filter.visual_change_weight == 0.7
-    assert cfg.demo_filter.text_density_weight == 0.3
+    assert cfg.demo_filter.llm_provider == "anthropic"
+    assert cfg.demo_filter.llm_model == "claude-haiku-4-5"
+    assert cfg.demo_filter.frame_search_resolution == 360
+    assert cfg.demo_filter.ssim_stability_threshold == 0.92
+    assert cfg.demo_filter.forward_search_step_sec == 0.5
+    assert cfg.demo_filter.forward_search_window_max_sec == 5.0
+    assert cfg.demo_filter.gallery_min_words == 5
+
+
+def test_demo_filter_config_rejects_unknown_provider():
+    import pytest
+    from pydantic import ValidationError
+
+    from peeklet.config import DemoFilterConfig
+
+    with pytest.raises(ValidationError):
+        DemoFilterConfig(llm_provider="cohere")  # type: ignore[arg-type]

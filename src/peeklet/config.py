@@ -83,19 +83,22 @@ class VideoConfig(BaseModel):
 class DemoFilterConfig(BaseModel):
     """Demo-mode frame filtering settings.
 
-    Activated via the CLI ``--demo-mode`` flag. When enabled, runs a sparse
-    OCR sweep to classify content type and uses the transcript to anchor
-    keyframe selection. See the design spec for full details.
+    Activated via the CLI ``--demo-mode`` flag. The LLM picks screenshot-worthy
+    moments from the transcript and Peeklet picks the exact frame for each
+    moment using forward-search bidirectional SSIM stability plus an OCR
+    gallery check. See the design spec for full details.
     """
 
     enabled: bool = False
-    ocr_sample_interval_sec: float = Field(default=30.0, gt=0.0)
-    ocr_downscale_dim: int = Field(default=360, gt=0)
-    ocr_min_words: int = Field(default=5, ge=0)
-    major_change_ssim: float = Field(default=0.70, ge=0.0, le=1.0)
-    major_change_blocks: int = Field(default=15, ge=0)
-    visual_change_weight: float = Field(default=0.7, ge=0.0)
-    text_density_weight: float = Field(default=0.3, ge=0.0)
+    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    llm_model: str = "claude-haiku-4-5"
+    # Frame search and selection
+    frame_search_resolution: int = Field(default=360, gt=0)
+    ssim_stability_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
+    forward_search_step_sec: float = Field(default=0.5, gt=0.0)
+    forward_search_window_max_sec: float = Field(default=5.0, gt=0.0)
+    # Gallery detection (reuses _count_words_in_frame)
+    gallery_min_words: int = Field(default=5, ge=0)
 
 
 class PeekletConfig(BaseModel):
