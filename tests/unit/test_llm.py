@@ -382,3 +382,24 @@ def test_openrouter_client_raises_after_two_unparseable(monkeypatch):
         client.pick_moments(_make_segments(), video_duration=60.0)
 
     assert fake_client.chat.completions.create.call_count == 2
+
+
+def test_build_llm_client_openrouter_missing_key_raises(monkeypatch):
+    from peeklet.core.llm import build_llm_client
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        build_llm_client(provider="openrouter", model="anthropic/claude-3.5-sonnet")
+
+
+def test_build_llm_client_openrouter_returns_openrouter_client(monkeypatch):
+    from peeklet.core import llm_openrouter
+    from peeklet.core.llm import build_llm_client
+
+    fake_openai = MagicMock()
+    monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+
+    client = build_llm_client(provider="openrouter", model="anthropic/claude-3.5-sonnet")
+
+    assert isinstance(client, llm_openrouter.OpenRouterClient)

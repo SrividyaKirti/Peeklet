@@ -158,6 +158,7 @@ def _parse_moments_json(raw: str, video_duration: float) -> list[Moment]:
 _PROVIDER_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 
 
@@ -184,6 +185,10 @@ def build_llm_client(provider: str, model: str) -> LLMClient:
         from peeklet.core.llm_openai import OpenAIClient
 
         return OpenAIClient(model=model)
+    if provider == "openrouter":
+        from peeklet.core.llm_openrouter import OpenRouterClient
+
+        return OpenRouterClient(model=model)
 
     # Unreachable — guarded above.
     raise AssertionError(f"unhandled provider {provider!r}")
