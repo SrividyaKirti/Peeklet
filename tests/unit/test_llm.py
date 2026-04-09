@@ -214,3 +214,69 @@ def test_anthropic_client_raises_after_two_unparseable(monkeypatch):
         client.pick_moments(_make_segments(), video_duration=60.0)
 
     assert fake_client.messages.create.call_count == 2
+
+
+def test_openai_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
+    from peeklet.core import llm_openai
+    from peeklet.utils.types import Moment
+
+    fake_message = MagicMock()
+    fake_message.content = '[{"timestamp": 11.0, "caption": "c", "reason": "r"}]'
+    fake_choice = MagicMock(message=fake_message)
+    fake_response = MagicMock(choices=[fake_choice])
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    fake_openai = MagicMock()
+    fake_openai.OpenAI.return_value = fake_client
+    monkeypatch.setattr(llm_openai, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    client = llm_openai.OpenAIClient(model="gpt-4o-mini")
+    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert moments == [Moment(timestamp=11.0, caption="c", reason="r")]
+    fake_client.chat.completions.create.assert_called_once()
+    call_kwargs = fake_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["messages"][0]["role"] == "system"
+    assert call_kwargs["messages"][1]["role"] == "user"
+
+
+def test_openai_client_passes_base_url_when_set(monkeypatch):
+    from peeklet.core import llm_openai
+
+    fake_openai = MagicMock()
+    monkeypatch.setattr(llm_openai, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+
+    llm_openai.OpenAIClient(model="llama3")
+
+    fake_openai.OpenAI.assert_called_once()
+    call_kwargs = fake_openai.OpenAI.call_args.kwargs
+    assert call_kwargs.get("base_url") == "http://localhost:11434/v1"
+
+
+def test_openai_client_retries_once_on_unparseable(monkeypatch):
+    from peeklet.core import llm_openai
+
+    bad_message = MagicMock(content="not json")
+    good_message = MagicMock(content='[{"timestamp": 1.0, "caption": "c", "reason": "r"}]')
+    bad_response = MagicMock(choices=[MagicMock(message=bad_message)])
+    good_response = MagicMock(choices=[MagicMock(message=good_message)])
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.side_effect = [bad_response, good_response]
+
+    fake_openai = MagicMock()
+    fake_openai.OpenAI.return_value = fake_client
+    monkeypatch.setattr(llm_openai, "openai", fake_openai)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    client = llm_openai.OpenAIClient(model="gpt-4o-mini")
+    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert len(moments) == 1
+    assert fake_client.chat.completions.create.call_count == 2
