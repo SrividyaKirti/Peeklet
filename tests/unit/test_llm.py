@@ -280,3 +280,105 @@ def test_openai_client_retries_once_on_unparseable(monkeypatch):
 
     assert len(moments) == 1
     assert fake_client.chat.completions.create.call_count == 2
+
+
+def test_openrouter_client_constructs_with_hardcoded_base_url_and_headers(monkeypatch):
+    from peeklet.core import llm_openrouter
+
+    fake_openai = MagicMock()
+    monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+
+    llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
+
+    fake_openai.OpenAI.assert_called_once()
+    call_kwargs = fake_openai.OpenAI.call_args.kwargs
+    assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+    assert call_kwargs["api_key"] == "or-test-key"
+    assert call_kwargs["default_headers"]["HTTP-Referer"] == (
+        "https://github.com/SrividyaKirti/Peeklet"
+    )
+    assert call_kwargs["default_headers"]["X-Title"] == "Peeklet"
+
+
+def test_openrouter_client_raises_when_sdk_missing(monkeypatch):
+    from peeklet.core import llm_openrouter
+
+    monkeypatch.setattr(llm_openrouter, "openai", None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+
+    with pytest.raises(RuntimeError, match=r"\[demo\] extra"):
+        llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
+
+
+def test_openrouter_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
+    from peeklet.core import llm_openrouter
+    from peeklet.utils.types import Moment
+
+    fake_message = MagicMock()
+    fake_message.content = '[{"timestamp": 13.0, "caption": "c", "reason": "r"}]'
+    fake_choice = MagicMock(message=fake_message)
+    fake_response = MagicMock(choices=[fake_choice])
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    fake_openai = MagicMock()
+    fake_openai.OpenAI.return_value = fake_client
+    monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+
+    client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
+    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert moments == [Moment(timestamp=13.0, caption="c", reason="r")]
+    fake_client.chat.completions.create.assert_called_once()
+    call_kwargs = fake_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == "anthropic/claude-3.5-sonnet"
+    assert call_kwargs["messages"][0]["role"] == "system"
+    assert call_kwargs["messages"][1]["role"] == "user"
+
+
+def test_openrouter_client_retries_once_on_unparseable(monkeypatch):
+    from peeklet.core import llm_openrouter
+
+    bad_message = MagicMock(content="not json")
+    good_message = MagicMock(content='[{"timestamp": 1.0, "caption": "c", "reason": "r"}]')
+    bad_response = MagicMock(choices=[MagicMock(message=bad_message)])
+    good_response = MagicMock(choices=[MagicMock(message=good_message)])
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.side_effect = [bad_response, good_response]
+
+    fake_openai = MagicMock()
+    fake_openai.OpenAI.return_value = fake_client
+    monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+
+    client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
+    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert len(moments) == 1
+    assert fake_client.chat.completions.create.call_count == 2
+
+
+def test_openrouter_client_raises_after_two_unparseable(monkeypatch):
+    from peeklet.core import llm_openrouter
+    from peeklet.core.llm import LLMResponseError
+
+    bad_message = MagicMock(content="garbage")
+    bad_response = MagicMock(choices=[MagicMock(message=bad_message)])
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = bad_response
+
+    fake_openai = MagicMock()
+    fake_openai.OpenAI.return_value = fake_client
+    monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+
+    client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
+    with pytest.raises(LLMResponseError):
+        client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert fake_client.chat.completions.create.call_count == 2
