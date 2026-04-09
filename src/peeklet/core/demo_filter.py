@@ -244,7 +244,7 @@ def select_frames_for_moments(
             )
             continue
 
-        frame_id = f"demo_{idx:04d}_{int(picked_ts):04d}s"
+        frame_id = f"demo_{idx:04d}_{int(picked_ts * 1000):08d}ms"
         asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
 
         results.append(
