@@ -329,27 +329,27 @@ def process_video(
     # Demo mode: bypass the coarse pass entirely. The LLM picks moments,
     # Stage B picks frames, and we write outputs directly.
     if config.demo_filter.enabled:
-        transcript_segments: list[TranscriptSegment] = []
+        demo_transcript: list[TranscriptSegment] = []
         if config.video.transcript_path:
-            transcript_segments = parse_transcript(Path(config.video.transcript_path))
+            demo_transcript = parse_transcript(Path(config.video.transcript_path))
 
-        results = apply_demo_filter(
+        demo_results = apply_demo_filter(
             decoder=decoder,
-            transcript=transcript_segments,
+            transcript=demo_transcript,
             config=config.demo_filter,
             output_dir=output_dir,
         )
 
-        ctx = build_context(meta.filename, meta.duration, results, transcript_segments)
+        ctx = build_context(meta.filename, meta.duration, demo_results, demo_transcript)
         write_context_json(ctx, output_dir / "context.json")
         write_context_markdown(ctx, output_dir / "context.md")
 
-        for r in results:
+        for r in demo_results:
             writer.append(r)
         if owns_writer:
             writer.flush()
 
-        return results
+        return demo_results
 
     # Adaptive masking is designed for screencasts (cursor/clock noise).
     # In video mode it both adds significant overhead and tends to mask out

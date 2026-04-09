@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Lazy-import via module attribute so tests can patch this.
 try:
-    import anthropic  # type: ignore[import-not-found]
+    import anthropic
 except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
     anthropic = None  # type: ignore[assignment]
 

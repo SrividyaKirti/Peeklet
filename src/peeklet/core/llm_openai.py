@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 try:
-    import openai  # type: ignore[import-not-found]
+    import openai
 except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
     openai = None  # type: ignore[assignment]
 
@@ -40,11 +40,11 @@ class OpenAIClient:
             )
         self._model = model
 
-        client_kwargs: dict[str, str] = {}
         base_url = os.environ.get("OPENAI_BASE_URL")
         if base_url:
-            client_kwargs["base_url"] = base_url
-        self._client = openai.OpenAI(**client_kwargs)
+            self._client = openai.OpenAI(base_url=base_url)
+        else:
+            self._client = openai.OpenAI()
 
     def pick_moments(
         self, transcript: list[TranscriptSegment], video_duration: float

@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 # Imported lazily so test files can patch ``demo_filter.pytesseract``.
 try:
-    import pytesseract  # type: ignore[import-not-found]
+    import pytesseract
 except ImportError:  # pragma: no cover - exercised in install-error path
-    pytesseract = None  # type: ignore[assignment]
+    pytesseract = None
 
 _MIN_WORD_LENGTH = 2
 _MIN_WORD_CONFIDENCE = 30
@@ -51,7 +51,7 @@ def _downscale_for_ocr(frame: np.ndarray, downscale_dim: int) -> np.ndarray:
     scale = downscale_dim / longest
     new_w = max(1, int(round(w * scale)))
     new_h = max(1, int(round(h * scale)))
-    img = Image.fromarray(frame).resize((new_w, new_h), Image.BILINEAR)
+    img = Image.fromarray(frame).resize((new_w, new_h), Image.Resampling.BILINEAR)
     return np.asarray(img)
 
 

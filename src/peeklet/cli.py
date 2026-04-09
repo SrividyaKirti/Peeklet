@@ -137,7 +137,7 @@ def main(
             )
         config.demo_filter.enabled = True
         if llm_provider is not None:
-            config.demo_filter.llm_provider = llm_provider
+            config.demo_filter.llm_provider = llm_provider  # type: ignore[assignment]
         if llm_model is not None:
             config.demo_filter.llm_model = llm_model
 
