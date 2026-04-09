@@ -162,9 +162,11 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
     from peeklet.core.transcript_trigger import detect_triggers
     from peeklet.core.video import process_video
 
-    # Detect transcript triggers if transcript is provided
+    # Detect transcript triggers if transcript is provided.
+    # Skip in demo mode — the demo pipeline picks moments from the LLM,
+    # not from keyword heuristics, and ignores forced_timestamps anyway.
     forced_timestamps: list[float] = []
-    if config.video.transcript_path:
+    if config.video.transcript_path and not config.demo_filter.enabled:
         segments = parse_transcript(Path(config.video.transcript_path))
         triggers = detect_triggers(segments)
         forced_timestamps = [t.timestamp for t in triggers]

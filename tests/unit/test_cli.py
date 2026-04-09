@@ -276,6 +276,7 @@ class TestVideoCliDetection:
         assert "single video" in result.output.lower()
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_demo_mode_requires_transcript(tmp_path):
     """--demo-mode without --transcript exits with a clear error."""
     from click.testing import CliRunner
@@ -326,6 +327,7 @@ def test_cli_demo_mode_requires_video(tmp_path):
     assert "--demo-mode only applies to video inputs" in result.output
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
     """--llm-provider and --llm-model end up on config.demo_filter."""
     from click.testing import CliRunner
@@ -381,6 +383,7 @@ def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
     }
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_demo_mode_accepts_openrouter_provider(tmp_path, monkeypatch):
     """--llm-provider openrouter is accepted by Click and propagates to config."""
     from click.testing import CliRunner
@@ -429,3 +432,88 @@ def test_cli_demo_mode_accepts_openrouter_provider(tmp_path, monkeypatch):
         "provider": "openrouter",
         "model": "anthropic/claude-3.5-sonnet",
     }
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_demo_mode_skips_transcript_trigger_detection(tmp_path, monkeypatch):
+    """In demo mode, detect_triggers() must not run — it's wasted work
+    because the demo-mode pipeline ignores forced_timestamps entirely."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import transcript_trigger as tt_module
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nLook at this dashboard here\n")
+
+    call_count = {"n": 0}
+
+    def spy_detect_triggers(segments):
+        call_count["n"] += 1
+        return []
+
+    monkeypatch.setattr(tt_module, "detect_triggers", spy_detect_triggers)
+    # Also patch the symbol where cli.py imports it (cli.py imports inside _run_video_mode,
+    # so the import statement re-binds the symbol — patch the source module to be safe).
+    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--transcript",
+            str(transcript),
+            "--demo-mode",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert call_count["n"] == 0, "detect_triggers must NOT run in demo mode"
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_non_demo_mode_still_runs_transcript_trigger_detection(tmp_path, monkeypatch):
+    """In non-demo mode, detect_triggers() must still run for transcript triggers."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import transcript_trigger as tt_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nLook at this dashboard here\n")
+
+    call_count = {"n": 0}
+    real_detect = tt_module.detect_triggers
+
+    def spy_detect_triggers(segments):
+        call_count["n"] += 1
+        return real_detect(segments)
+
+    monkeypatch.setattr(tt_module, "detect_triggers", spy_detect_triggers)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--transcript",
+            str(transcript),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert call_count["n"] == 1, "detect_triggers must run exactly once in non-demo mode"
