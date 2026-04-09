@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 
 import peeklet
-from peeklet.config import apply_quality_preset, load_config
+from peeklet.config import apply_quality_preset, apply_sensitivity_preset, load_config
 from peeklet.core.loader import load_frame
 from peeklet.pipeline import Pipeline
 
@@ -145,6 +145,13 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     help="Processing quality preset. Bundles processing_max_dim, "
     "sample_fps, and frame_search_resolution.",
 )
+@click.option(
+    "--sensitivity",
+    type=click.Choice(["low", "medium", "high"]),
+    default=None,
+    help="Change-detection sensitivity preset. Bundles ssim_threshold, "
+    "min_changed_pct, and min_changed_blocks.",
+)
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(
     input_path: Path,
@@ -157,6 +164,7 @@ def main(
     mode: str | None,
     no_audio: bool,
     quality: str | None,
+    sensitivity: str | None,
     transcript_path: Path | None,
 ) -> None:
     """Smart screenshot change detection.
@@ -175,6 +183,9 @@ def main(
 
     if quality is not None:
         apply_quality_preset(config, quality)
+
+    if sensitivity is not None:
+        apply_sensitivity_preset(config, sensitivity)
 
     if demo_mode:
         if not transcript_path:

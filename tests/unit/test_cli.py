@@ -684,3 +684,43 @@ def test_cli_non_demo_mode_still_runs_transcript_trigger_detection(tmp_path, mon
     )
     assert result.exit_code == 0, result.output
     assert call_count["n"] == 1, "detect_triggers must run exactly once in non-demo mode"
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_sensitivity_preset_high_applies_values(tmp_path, monkeypatch):
+    """--sensitivity high sets the comparator thresholds correctly."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    captured = {}
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["ssim"] = config.comparator.ssim_threshold
+        captured["pct"] = config.comparator.min_changed_pct
+        captured["blocks"] = config.comparator.min_changed_blocks
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--sensitivity",
+            "high",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"ssim": 0.75, "pct": 1.0, "blocks": 2}

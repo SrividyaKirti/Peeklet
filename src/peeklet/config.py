@@ -167,3 +167,34 @@ def apply_quality_preset(config: PeekletConfig, preset: str) -> None:
     config.video.processing_max_dim = int(values["processing_max_dim"])
     config.video.sample_fps = float(values["sample_fps"])
     config.demo_filter.frame_search_resolution = int(values["frame_search_resolution"])
+
+
+SENSITIVITY_PRESETS: dict[str, dict[str, float | int]] = {
+    "low": {
+        "ssim_threshold": 0.92,
+        "min_changed_pct": 5.0,
+        "min_changed_blocks": 5,
+    },
+    "medium": {
+        "ssim_threshold": 0.85,
+        "min_changed_pct": 2.0,
+        "min_changed_blocks": 3,
+    },
+    "high": {
+        "ssim_threshold": 0.75,
+        "min_changed_pct": 1.0,
+        "min_changed_blocks": 2,
+    },
+}
+
+
+def apply_sensitivity_preset(config: PeekletConfig, preset: str) -> None:
+    """Apply a sensitivity preset in place. Overrides any existing values."""
+    if preset not in SENSITIVITY_PRESETS:
+        raise ValueError(
+            f"unknown sensitivity preset '{preset}'. Valid: {sorted(SENSITIVITY_PRESETS.keys())}"
+        )
+    values = SENSITIVITY_PRESETS[preset]
+    config.comparator.ssim_threshold = float(values["ssim_threshold"])
+    config.comparator.min_changed_pct = float(values["min_changed_pct"])
+    config.comparator.min_changed_blocks = int(values["min_changed_blocks"])
