@@ -136,7 +136,7 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     "keyframe_format",
     type=click.Choice(["png", "jpg"]),
     default=None,
-    help="Keyframe image format. Overrides config.exporter.keyframe_format.",
+    help="Keyframe image format (overrides config default).",
 )
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(
