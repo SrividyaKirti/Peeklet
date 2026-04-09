@@ -456,9 +456,11 @@ def test_cli_demo_mode_skips_transcript_trigger_detection(tmp_path, monkeypatch)
         call_count["n"] += 1
         return []
 
+    # cli.py imports detect_triggers lazily inside _run_video_mode, so the
+    # name is looked up on tt_module at call time — patching the source
+    # module is the correct (and only necessary) target.
     monkeypatch.setattr(tt_module, "detect_triggers", spy_detect_triggers)
-    # Also patch the symbol where cli.py imports it (cli.py imports inside _run_video_mode,
-    # so the import statement re-binds the symbol — patch the source module to be safe).
+    # Stub out the demo filter so the test doesn't need a real LLM call.
     monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
 
     runner = CliRunner()
