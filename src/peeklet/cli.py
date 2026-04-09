@@ -14,6 +14,30 @@ from peeklet.pipeline import Pipeline
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 
+def _write_context_outputs(
+    source_name: str,
+    duration: float,
+    results: list,
+    transcript_segments: list,
+    output_dir: Path,
+) -> None:
+    """Write context.json and context.md to output_dir.
+
+    Centralized so both image mode and video mode can produce the
+    LLM-ready context artifacts. Imported lazily so the cost is paid
+    only when actually called.
+    """
+    from peeklet.core.context_exporter import (
+        build_context,
+        write_context_json,
+        write_context_markdown,
+    )
+
+    ctx = build_context(source_name, duration, results, transcript_segments)
+    write_context_json(ctx, output_dir / "context.json")
+    write_context_markdown(ctx, output_dir / "context.md")
+
+
 def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str]) -> str:
     """Detect whether input is video or image mode."""
     if input_path.is_file():
@@ -230,16 +254,30 @@ def _run_image_mode(
     click.echo(f"Processing {len(files)} frames from {input_dir}")
 
     keyframe_count = 0
+    results: list = []
     for f in files:
         frame = load_frame(f)
         result = pipeline.process_frame(frame, frame_id=f.stem, source_format=f.suffix.lstrip("."))
+        results.append(result)
         if result.is_keyframe:
             keyframe_count += 1
 
     pipeline.finalize()
     output_dir = Path(config.exporter.output_dir)
+
+    # Image mode has no real "duration" — pass 0.0 and use the directory
+    # name as the source. Transcript segments are empty for image input.
+    _write_context_outputs(
+        source_name=input_dir.name,
+        duration=0.0,
+        results=results,
+        transcript_segments=[],
+        output_dir=output_dir,
+    )
+
     click.echo(
         f"Done: {keyframe_count} keyframes from {len(files)} frames "
         f"({100 * keyframe_count / len(files):.1f}%). "
         f"Manifest: {output_dir / 'manifest.parquet'}"
     )
+    click.echo(f"Context: {output_dir / 'context.json'}, {output_dir / 'context.md'}")

@@ -64,6 +64,23 @@ class TestCli:
         )
         assert result.exit_code == 0
 
+    def test_image_mode_writes_context_files(self, tmp_path: Path) -> None:
+        """Image mode produces context.json and context.md alongside the manifest."""
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        _create_test_images(input_dir, count=5)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["--input", str(input_dir), "--output", str(output_dir)],
+        )
+        assert result.exit_code == 0, result.output
+
+        assert (output_dir / "manifest.parquet").exists()
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()
+
     def test_missing_input_dir_errors(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["--input", "/nonexistent/dir"])
