@@ -607,8 +607,11 @@ def test_cli_quality_preset_fast_applies_values(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
-def test_cli_quality_preset_default_is_balanced(tmp_path, monkeypatch):
-    """No --quality flag = today's defaults (which match 'balanced')."""
+def test_cli_no_quality_flag_uses_current_defaults(tmp_path, monkeypatch):
+    """No --quality flag = today's defaults (which by design match the
+    'balanced' preset). This is a regression guard against accidental
+    drift in the underlying VideoConfig defaults — it does NOT exercise
+    apply_quality_preset (the if-gate skips it when --quality is absent)."""
     from click.testing import CliRunner
 
     from peeklet.cli import main

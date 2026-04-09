@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 
 import peeklet
-from peeklet.config import load_config
+from peeklet.config import apply_quality_preset, load_config
 from peeklet.core.loader import load_frame
 from peeklet.pipeline import Pipeline
 
@@ -174,8 +174,6 @@ def main(
         config.exporter.keyframe_format = keyframe_format  # type: ignore[assignment]
 
     if quality is not None:
-        from peeklet.config import apply_quality_preset
-
         apply_quality_preset(config, quality)
 
     if demo_mode:
