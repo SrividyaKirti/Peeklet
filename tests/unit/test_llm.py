@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 
@@ -138,3 +140,77 @@ def test_parse_moments_raises_when_no_array():
 
     with pytest.raises(LLMResponseError, match="no JSON array"):
         _parse_moments_json("just some prose, no array", video_duration=60.0)
+
+
+def test_anthropic_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
+    from peeklet.core import llm_anthropic
+    from peeklet.utils.types import Moment
+
+    fake_response = MagicMock()
+    fake_response.content = [MagicMock(text='[{"timestamp": 7.0, "caption": "c", "reason": "r"}]')]
+
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = fake_response
+
+    fake_anthropic = MagicMock()
+    fake_anthropic.Anthropic.return_value = fake_client
+    monkeypatch.setattr(llm_anthropic, "anthropic", fake_anthropic)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = llm_anthropic.AnthropicClient(model="claude-haiku-4-5")
+    segments = _make_segments()
+    moments = client.pick_moments(segments, video_duration=60.0)
+
+    assert moments == [Moment(timestamp=7.0, caption="c", reason="r")]
+    fake_anthropic.Anthropic.assert_called_once()
+    fake_client.messages.create.assert_called_once()
+    call_kwargs = fake_client.messages.create.call_args.kwargs
+    assert call_kwargs["model"] == "claude-haiku-4-5"
+    assert "system" in call_kwargs
+    assert call_kwargs["messages"][0]["role"] == "user"
+
+
+def test_anthropic_client_retries_once_on_unparseable(monkeypatch):
+    from peeklet.core import llm_anthropic
+
+    bad_response = MagicMock()
+    bad_response.content = [MagicMock(text="not json")]
+    good_response = MagicMock()
+    good_response.content = [MagicMock(text='[{"timestamp": 1.0, "caption": "c", "reason": "r"}]')]
+
+    fake_client = MagicMock()
+    fake_client.messages.create.side_effect = [bad_response, good_response]
+
+    fake_anthropic = MagicMock()
+    fake_anthropic.Anthropic.return_value = fake_client
+    monkeypatch.setattr(llm_anthropic, "anthropic", fake_anthropic)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = llm_anthropic.AnthropicClient(model="claude-haiku-4-5")
+    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert len(moments) == 1
+    assert fake_client.messages.create.call_count == 2
+
+
+def test_anthropic_client_raises_after_two_unparseable(monkeypatch):
+    from peeklet.core import llm_anthropic
+    from peeklet.core.llm import LLMResponseError
+
+    bad_response = MagicMock()
+    bad_response.content = [MagicMock(text="garbage")]
+
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = bad_response
+
+    fake_anthropic = MagicMock()
+    fake_anthropic.Anthropic.return_value = fake_client
+    monkeypatch.setattr(llm_anthropic, "anthropic", fake_anthropic)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    client = llm_anthropic.AnthropicClient(model="claude-haiku-4-5")
+    with pytest.raises(LLMResponseError):
+        client.pick_moments(_make_segments(), video_duration=60.0)
+
+    assert fake_client.messages.create.call_count == 2
