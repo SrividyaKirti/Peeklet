@@ -138,6 +138,13 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     default=None,
     help="Keyframe image format (overrides config default).",
 )
+@click.option(
+    "--quality",
+    type=click.Choice(["fast", "balanced", "precise"]),
+    default=None,
+    help="Processing quality preset. Bundles processing_max_dim, "
+    "sample_fps, and frame_search_resolution.",
+)
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(
     input_path: Path,
@@ -149,6 +156,7 @@ def main(
     llm_provider: str | None,
     mode: str | None,
     no_audio: bool,
+    quality: str | None,
     transcript_path: Path | None,
 ) -> None:
     """Smart screenshot change detection.
@@ -164,6 +172,11 @@ def main(
     config.exporter.output_dir = str(output_dir)
     if keyframe_format is not None:
         config.exporter.keyframe_format = keyframe_format  # type: ignore[assignment]
+
+    if quality is not None:
+        from peeklet.config import apply_quality_preset
+
+        apply_quality_preset(config, quality)
 
     if demo_mode:
         if not transcript_path:

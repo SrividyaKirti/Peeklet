@@ -8,12 +8,14 @@ import yaml
 from pydantic import ValidationError
 
 from peeklet.config import (
+    QUALITY_PRESETS,
     ComparatorConfig,
     HasherConfig,
     MaskingConfig,
     PeekletConfig,
     PipelineConfig,
     VideoConfig,
+    apply_quality_preset,
     load_config,
 )
 
@@ -187,3 +189,43 @@ def test_demo_filter_config_rejects_unknown_provider():
 
     with pytest.raises(ValidationError):
         DemoFilterConfig(llm_provider="cohere")  # type: ignore[arg-type]
+
+
+class TestQualityPresets:
+    def test_quality_presets_exist(self) -> None:
+        assert set(QUALITY_PRESETS.keys()) == {"fast", "balanced", "precise"}
+
+    def test_apply_quality_preset_balanced_matches_current_defaults(self) -> None:
+        """The 'balanced' preset must match today's default values exactly,
+        so users who don't pass --quality see no behavior change."""
+        config = PeekletConfig()
+        baseline_max_dim = config.video.processing_max_dim
+        baseline_sample_fps = config.video.sample_fps
+        baseline_search_res = config.demo_filter.frame_search_resolution
+
+        apply_quality_preset(config, "balanced")
+
+        assert config.video.processing_max_dim == baseline_max_dim
+        assert config.video.sample_fps == baseline_sample_fps
+        assert config.demo_filter.frame_search_resolution == baseline_search_res
+
+    def test_apply_quality_preset_fast(self) -> None:
+        config = PeekletConfig()
+        apply_quality_preset(config, "fast")
+
+        assert config.video.processing_max_dim == 480
+        assert config.video.sample_fps == 0.5
+        assert config.demo_filter.frame_search_resolution == 240
+
+    def test_apply_quality_preset_precise(self) -> None:
+        config = PeekletConfig()
+        apply_quality_preset(config, "precise")
+
+        assert config.video.processing_max_dim == 1080
+        assert config.video.sample_fps == 2.0
+        assert config.demo_filter.frame_search_resolution == 540
+
+    def test_apply_quality_preset_invalid_raises(self) -> None:
+        config = PeekletConfig()
+        with pytest.raises(ValueError, match="unknown quality preset"):
+            apply_quality_preset(config, "ludicrous")

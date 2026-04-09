@@ -567,6 +567,83 @@ def test_cli_demo_mode_skips_transcript_trigger_detection(tmp_path, monkeypatch)
 
 
 @pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_quality_preset_fast_applies_values(tmp_path, monkeypatch):
+    """--quality fast sets processing_max_dim, sample_fps, frame_search_resolution."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    captured = {}
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["max_dim"] = config.video.processing_max_dim
+        captured["sample_fps"] = config.video.sample_fps
+        captured["search_res"] = config.demo_filter.frame_search_resolution
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--quality",
+            "fast",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"max_dim": 480, "sample_fps": 0.5, "search_res": 240}
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_quality_preset_default_is_balanced(tmp_path, monkeypatch):
+    """No --quality flag = today's defaults (which match 'balanced')."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    captured = {}
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["max_dim"] = config.video.processing_max_dim
+        captured["sample_fps"] = config.video.sample_fps
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"max_dim": 720, "sample_fps": 1.0}
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_non_demo_mode_still_runs_transcript_trigger_detection(tmp_path, monkeypatch):
     """In non-demo mode, detect_triggers() must still run for transcript triggers."""
     from click.testing import CliRunner

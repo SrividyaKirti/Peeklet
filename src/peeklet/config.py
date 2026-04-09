@@ -129,3 +129,41 @@ def load_config(path: Path | None) -> PeekletConfig:
     data = yaml.safe_load(text) if path.suffix in (".yaml", ".yml") else json.loads(text)
 
     return PeekletConfig.model_validate(data or {})
+
+
+# --- CLI presets ---
+# Presets bundle multiple raw config knobs into one user-facing concept
+# so the CLI surface stays small while still letting users tune the
+# things they actually care about. See the repo restructure spec
+# (D1) for the full rationale. Power users can still override
+# individual fields via --config <yaml>.
+
+QUALITY_PRESETS: dict[str, dict[str, float | int]] = {
+    "fast": {
+        "processing_max_dim": 480,
+        "sample_fps": 0.5,
+        "frame_search_resolution": 240,
+    },
+    "balanced": {
+        "processing_max_dim": 720,
+        "sample_fps": 1.0,
+        "frame_search_resolution": 360,
+    },
+    "precise": {
+        "processing_max_dim": 1080,
+        "sample_fps": 2.0,
+        "frame_search_resolution": 540,
+    },
+}
+
+
+def apply_quality_preset(config: PeekletConfig, preset: str) -> None:
+    """Apply a quality preset in place. Overrides any existing values."""
+    if preset not in QUALITY_PRESETS:
+        raise ValueError(
+            f"unknown quality preset '{preset}'. Valid: {sorted(QUALITY_PRESETS.keys())}"
+        )
+    values = QUALITY_PRESETS[preset]
+    config.video.processing_max_dim = int(values["processing_max_dim"])
+    config.video.sample_fps = float(values["sample_fps"])
+    config.demo_filter.frame_search_resolution = int(values["frame_search_resolution"])
