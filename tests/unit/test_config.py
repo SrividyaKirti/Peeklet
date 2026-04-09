@@ -72,6 +72,27 @@ class TestValidation:
         with pytest.raises(ValueError):
             ComparatorConfig(min_changed_blocks=-1)
 
+    def test_processing_max_dim_rejects_tiny_values(self) -> None:
+        """processing_max_dim below 64 is silently broken — must error."""
+        from peeklet.config import VideoConfig
+
+        with pytest.raises(ValidationError):
+            VideoConfig(processing_max_dim=10)
+
+    def test_processing_max_dim_accepts_64(self) -> None:
+        """64 is the minimum; anything below it errors."""
+        from peeklet.config import VideoConfig
+
+        config = VideoConfig(processing_max_dim=64)
+        assert config.processing_max_dim == 64
+
+    def test_processing_max_dim_accepts_none(self) -> None:
+        """None still means 'no downscaling' — must remain valid."""
+        from peeklet.config import VideoConfig
+
+        config = VideoConfig(processing_max_dim=None)
+        assert config.processing_max_dim is None
+
 
 class TestLoadConfig:
     def test_load_from_json_file(self, tmp_path: Path) -> None:

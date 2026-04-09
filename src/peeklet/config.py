@@ -77,7 +77,9 @@ class VideoConfig(BaseModel):
     transcript_path: str | None = None
     # Performance: downscale frames before pipeline processing. None = no downscale.
     # Saved keyframe images are at the downscaled resolution.
-    processing_max_dim: int | None = Field(default=720, gt=0)
+    # Minimum of 64 prevents misconfiguration that silently degrades quality.
+    # Anything smaller produces useless frames for the cascade.
+    processing_max_dim: int | None = Field(default=720, ge=64)
 
 
 class DemoFilterConfig(BaseModel):
