@@ -7,11 +7,35 @@ from pathlib import Path
 import click
 
 import peeklet
-from peeklet.config import load_config
+from peeklet.config import apply_quality_preset, apply_sensitivity_preset, load_config
 from peeklet.core.loader import load_frame
 from peeklet.pipeline import Pipeline
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
+
+
+def _write_context_outputs(
+    source_name: str,
+    duration: float,
+    results: list,
+    transcript_segments: list,
+    output_dir: Path,
+) -> None:
+    """Write context.json and context.md to output_dir.
+
+    Centralized so both image mode and video mode can produce the
+    LLM-ready context artifacts. Imported lazily so the cost is paid
+    only when actually called.
+    """
+    from peeklet.core.context_exporter import (
+        build_context,
+        write_context_json,
+        write_context_markdown,
+    )
+
+    ctx = build_context(source_name, duration, results, transcript_segments)
+    write_context_json(ctx, output_dir / "context.json")
+    write_context_markdown(ctx, output_dir / "context.md")
 
 
 def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str]) -> str:
@@ -107,17 +131,41 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     help="LLM model identifier for --demo-mode. "
     "Defaults to the value in config.demo_filter.llm_model.",
 )
+@click.option(
+    "--format",
+    "keyframe_format",
+    type=click.Choice(["png", "jpg"]),
+    default=None,
+    help="Keyframe image format (overrides config default).",
+)
+@click.option(
+    "--quality",
+    type=click.Choice(["fast", "balanced", "precise"]),
+    default=None,
+    help="Processing quality preset. Bundles processing_max_dim, "
+    "sample_fps, and frame_search_resolution.",
+)
+@click.option(
+    "--sensitivity",
+    type=click.Choice(["low", "medium", "high"]),
+    default=None,
+    help="Change-detection sensitivity preset. Bundles ssim_threshold, "
+    "min_changed_pct, and min_changed_blocks.",
+)
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(
     input_path: Path,
     output_dir: Path,
     config_path: Path | None,
-    no_audio: bool,
-    mode: str | None,
-    transcript_path: Path | None,
     demo_mode: bool,
-    llm_provider: str | None,
+    keyframe_format: str | None,
     llm_model: str | None,
+    llm_provider: str | None,
+    mode: str | None,
+    no_audio: bool,
+    quality: str | None,
+    sensitivity: str | None,
+    transcript_path: Path | None,
 ) -> None:
     """Smart screenshot change detection.
 
@@ -130,6 +178,14 @@ def main(
     if transcript_path:
         config.video.transcript_path = str(transcript_path)
     config.exporter.output_dir = str(output_dir)
+    if keyframe_format is not None:
+        config.exporter.keyframe_format = keyframe_format  # type: ignore[assignment]
+
+    if quality is not None:
+        apply_quality_preset(config, quality)
+
+    if sensitivity is not None:
+        apply_sensitivity_preset(config, sensitivity)
 
     if demo_mode:
         if not transcript_path:
@@ -162,9 +218,11 @@ def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> N
     from peeklet.core.transcript_trigger import detect_triggers
     from peeklet.core.video import process_video
 
-    # Detect transcript triggers if transcript is provided
+    # Detect transcript triggers if transcript is provided.
+    # Skip in demo mode — the demo pipeline picks moments from the LLM,
+    # not from keyword heuristics, and ignores forced_timestamps anyway.
     forced_timestamps: list[float] = []
-    if config.video.transcript_path:
+    if config.video.transcript_path and not config.demo_filter.enabled:
         segments = parse_transcript(Path(config.video.transcript_path))
         triggers = detect_triggers(segments)
         forced_timestamps = [t.timestamp for t in triggers]
@@ -228,16 +286,33 @@ def _run_image_mode(
     click.echo(f"Processing {len(files)} frames from {input_dir}")
 
     keyframe_count = 0
+    results: list = []
     for f in files:
         frame = load_frame(f)
         result = pipeline.process_frame(frame, frame_id=f.stem, source_format=f.suffix.lstrip("."))
+        results.append(result)
         if result.is_keyframe:
             keyframe_count += 1
 
     pipeline.finalize()
     output_dir = Path(config.exporter.output_dir)
+
+    # Image mode has no inherent timeline. We pass duration=0.0 as a
+    # sentinel (image input is a sequence, not a stream) and use the
+    # input directory name as the "source" identifier so downstream
+    # context consumers have something to display. Transcript segments
+    # are always empty for image input — there's no narration to align.
+    _write_context_outputs(
+        source_name=input_dir.name,
+        duration=0.0,
+        results=results,
+        transcript_segments=[],
+        output_dir=output_dir,
+    )
+
     click.echo(
         f"Done: {keyframe_count} keyframes from {len(files)} frames "
         f"({100 * keyframe_count / len(files):.1f}%). "
         f"Manifest: {output_dir / 'manifest.parquet'}"
     )
+    click.echo(f"Context: {output_dir / 'context.json'}, {output_dir / 'context.md'}")

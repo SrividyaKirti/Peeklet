@@ -64,6 +64,91 @@ class TestCli:
         )
         assert result.exit_code == 0
 
+    def test_image_mode_writes_context_files(self, tmp_path: Path) -> None:
+        """Image mode produces context.json and context.md alongside the
+        manifest, with real content (not just empty placeholder files)."""
+        import json
+
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        _create_test_images(input_dir, count=5)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["--input", str(input_dir), "--output", str(output_dir)],
+        )
+        assert result.exit_code == 0, result.output
+
+        assert (output_dir / "manifest.parquet").exists()
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()
+
+        # Verify the context.json has real content, not an empty placeholder.
+        ctx = json.loads((output_dir / "context.json").read_text())
+        assert "video" in ctx
+        assert "screenshots" in ctx
+        # The 5 progressively-different test frames should yield at least one
+        # keyframe / screenshot. If results.append in _run_image_mode regresses,
+        # this assertion catches it.
+        assert ctx["video"]["total_screenshots"] >= 1
+        assert len(ctx["screenshots"]) >= 1
+        assert ctx["video"]["filename"] == "input"
+
+        # The context.md should be non-empty.
+        md_content = (output_dir / "context.md").read_text()
+        assert len(md_content) > 0
+
+    def test_format_flag_png_produces_png_keyframes(self, tmp_path: Path) -> None:
+        """--format png produces .png keyframe images."""
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        _create_test_images(input_dir, count=5)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(input_dir),
+                "--output",
+                str(output_dir),
+                "--format",
+                "png",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        png_files = list(output_dir.glob("*.png"))
+        jpg_files = list(output_dir.glob("*.jpg"))
+        assert len(png_files) >= 1, "expected at least one PNG keyframe"
+        assert len(jpg_files) == 0, "no JPG keyframes should be present"
+
+    def test_format_flag_jpg_produces_jpg_keyframes(self, tmp_path: Path) -> None:
+        """--format jpg (the existing default) produces .jpg keyframe images."""
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        _create_test_images(input_dir, count=5)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(input_dir),
+                "--output",
+                str(output_dir),
+                "--format",
+                "jpg",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        jpg_files = list(output_dir.glob("*.jpg"))
+        png_files = list(output_dir.glob("*.png"))
+        assert len(jpg_files) >= 1, "expected at least one JPG keyframe"
+        assert len(png_files) == 0
+
     def test_missing_input_dir_errors(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["--input", "/nonexistent/dir"])
@@ -276,6 +361,7 @@ class TestVideoCliDetection:
         assert "single video" in result.output.lower()
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_demo_mode_requires_transcript(tmp_path):
     """--demo-mode without --transcript exits with a clear error."""
     from click.testing import CliRunner
@@ -326,6 +412,7 @@ def test_cli_demo_mode_requires_video(tmp_path):
     assert "--demo-mode only applies to video inputs" in result.output
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
     """--llm-provider and --llm-model end up on config.demo_filter."""
     from click.testing import CliRunner
@@ -381,6 +468,7 @@ def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
     }
 
 
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_demo_mode_accepts_openrouter_provider(tmp_path, monkeypatch):
     """--llm-provider openrouter is accepted by Click and propagates to config."""
     from click.testing import CliRunner
@@ -429,3 +517,210 @@ def test_cli_demo_mode_accepts_openrouter_provider(tmp_path, monkeypatch):
         "provider": "openrouter",
         "model": "anthropic/claude-3.5-sonnet",
     }
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_demo_mode_skips_transcript_trigger_detection(tmp_path, monkeypatch):
+    """In demo mode, detect_triggers() must not run — it's wasted work
+    because the demo-mode pipeline ignores forced_timestamps entirely."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import transcript_trigger as tt_module
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nLook at this dashboard here\n")
+
+    call_count = {"n": 0}
+
+    def spy_detect_triggers(segments):
+        call_count["n"] += 1
+        return []
+
+    # cli.py imports detect_triggers lazily inside _run_video_mode, so the
+    # name is looked up on tt_module at call time — patching the source
+    # module is the correct (and only necessary) target.
+    monkeypatch.setattr(tt_module, "detect_triggers", spy_detect_triggers)
+    # Stub out the demo filter so the test doesn't need a real LLM call.
+    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--transcript",
+            str(transcript),
+            "--demo-mode",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert call_count["n"] == 0, "detect_triggers must NOT run in demo mode"
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_quality_preset_fast_applies_values(tmp_path, monkeypatch):
+    """--quality fast sets processing_max_dim, sample_fps, frame_search_resolution."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    captured = {}
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["max_dim"] = config.video.processing_max_dim
+        captured["sample_fps"] = config.video.sample_fps
+        captured["search_res"] = config.demo_filter.frame_search_resolution
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--quality",
+            "fast",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"max_dim": 480, "sample_fps": 0.5, "search_res": 240}
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_no_quality_flag_uses_current_defaults(tmp_path, monkeypatch):
+    """No --quality flag = today's defaults (which by design match the
+    'balanced' preset). This is a regression guard against accidental
+    drift in the underlying VideoConfig defaults — it does NOT exercise
+    apply_quality_preset (the if-gate skips it when --quality is absent)."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    captured = {}
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["max_dim"] = config.video.processing_max_dim
+        captured["sample_fps"] = config.video.sample_fps
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"max_dim": 720, "sample_fps": 1.0}
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_non_demo_mode_still_runs_transcript_trigger_detection(tmp_path, monkeypatch):
+    """In non-demo mode, detect_triggers() must still run for transcript triggers."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import transcript_trigger as tt_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nLook at this dashboard here\n")
+
+    call_count = {"n": 0}
+    real_detect = tt_module.detect_triggers
+
+    def spy_detect_triggers(segments):
+        call_count["n"] += 1
+        return real_detect(segments)
+
+    monkeypatch.setattr(tt_module, "detect_triggers", spy_detect_triggers)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--transcript",
+            str(transcript),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert call_count["n"] == 1, "detect_triggers must run exactly once in non-demo mode"
+
+
+@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
+def test_cli_sensitivity_preset_high_applies_values(tmp_path, monkeypatch):
+    """--sensitivity high sets the comparator thresholds correctly."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    captured = {}
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["ssim"] = config.comparator.ssim_threshold
+        captured["pct"] = config.comparator.min_changed_pct
+        captured["blocks"] = config.comparator.min_changed_blocks
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--sensitivity",
+            "high",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"ssim": 0.75, "pct": 1.0, "blocks": 2}

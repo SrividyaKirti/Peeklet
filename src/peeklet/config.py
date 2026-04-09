@@ -77,7 +77,9 @@ class VideoConfig(BaseModel):
     transcript_path: str | None = None
     # Performance: downscale frames before pipeline processing. None = no downscale.
     # Saved keyframe images are at the downscaled resolution.
-    processing_max_dim: int | None = Field(default=720, gt=0)
+    # Minimum of 64 prevents misconfiguration that silently degrades quality.
+    # Anything smaller produces useless frames for the cascade.
+    processing_max_dim: int | None = Field(default=720, ge=64)
 
 
 class DemoFilterConfig(BaseModel):
@@ -127,3 +129,72 @@ def load_config(path: Path | None) -> PeekletConfig:
     data = yaml.safe_load(text) if path.suffix in (".yaml", ".yml") else json.loads(text)
 
     return PeekletConfig.model_validate(data or {})
+
+
+# --- CLI presets ---
+# Presets bundle multiple raw config knobs into one user-facing concept
+# so the CLI surface stays small while still letting users tune the
+# things they actually care about. See the repo restructure spec
+# (D1) for the full rationale. Power users can still override
+# individual fields via --config <yaml>.
+
+QUALITY_PRESETS: dict[str, dict[str, float | int]] = {
+    "fast": {
+        "processing_max_dim": 480,
+        "sample_fps": 0.5,
+        "frame_search_resolution": 240,
+    },
+    "balanced": {
+        "processing_max_dim": 720,
+        "sample_fps": 1.0,
+        "frame_search_resolution": 360,
+    },
+    "precise": {
+        "processing_max_dim": 1080,
+        "sample_fps": 2.0,
+        "frame_search_resolution": 540,
+    },
+}
+
+
+def apply_quality_preset(config: PeekletConfig, preset: str) -> None:
+    """Apply a quality preset in place. Overrides any existing values."""
+    if preset not in QUALITY_PRESETS:
+        raise ValueError(
+            f"unknown quality preset '{preset}'. Valid: {sorted(QUALITY_PRESETS.keys())}"
+        )
+    values = QUALITY_PRESETS[preset]
+    config.video.processing_max_dim = int(values["processing_max_dim"])
+    config.video.sample_fps = float(values["sample_fps"])
+    config.demo_filter.frame_search_resolution = int(values["frame_search_resolution"])
+
+
+SENSITIVITY_PRESETS: dict[str, dict[str, float | int]] = {
+    "low": {
+        "ssim_threshold": 0.92,
+        "min_changed_pct": 5.0,
+        "min_changed_blocks": 5,
+    },
+    "medium": {
+        "ssim_threshold": 0.85,
+        "min_changed_pct": 2.0,
+        "min_changed_blocks": 3,
+    },
+    "high": {
+        "ssim_threshold": 0.75,
+        "min_changed_pct": 1.0,
+        "min_changed_blocks": 2,
+    },
+}
+
+
+def apply_sensitivity_preset(config: PeekletConfig, preset: str) -> None:
+    """Apply a sensitivity preset in place. Overrides any existing values."""
+    if preset not in SENSITIVITY_PRESETS:
+        raise ValueError(
+            f"unknown sensitivity preset '{preset}'. Valid: {sorted(SENSITIVITY_PRESETS.keys())}"
+        )
+    values = SENSITIVITY_PRESETS[preset]
+    config.comparator.ssim_threshold = float(values["ssim_threshold"])
+    config.comparator.min_changed_pct = float(values["min_changed_pct"])
+    config.comparator.min_changed_blocks = int(values["min_changed_blocks"])
