@@ -1,7 +1,9 @@
-"""Demo-mode frame filtering: sparse OCR sweep + transcript-anchored selection.
+"""Demo-mode frame filtering: transcript-driven LLM moment picking + frame selection.
 
-Activated via the CLI ``--demo-mode`` flag. See the design spec at
-``docs/superpowers/specs/2026-04-08-demo-mode-frame-filtering-design.md``.
+The LLM picks the moments from the transcript, Peeklet picks the exact frame
+at each moment using forward-search bidirectional SSIM stability and an OCR
+gallery check. See the design spec at
+``docs/superpowers/specs/2026-04-09-transcript-driven-demo-mode-design.md``.
 """
 
 from __future__ import annotations
@@ -12,13 +14,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from peeklet.config import DemoFilterConfig  # noqa: F401  (used in later tasks)
-    from peeklet.core.audio import TranscriptSegment  # noqa: F401  (used in later tasks)
-    from peeklet.core.video import VideoDecoder  # noqa: F401  (used in later tasks)
-    from peeklet.utils.types import (  # noqa: F401  (used in later tasks)
-        ContentSegment,
-        FrameResult,
-    )
+    from peeklet.config import DemoFilterConfig  # noqa: F401  (used in Tasks 8/9)
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.video import VideoDecoder  # noqa: F401  (used in Tasks 8/9)
+    from peeklet.utils.types import FrameResult, Moment  # noqa: F401  (used in Tasks 8/9)
 
 logger = logging.getLogger(__name__)
 
@@ -82,3 +81,37 @@ def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
             continue
         count += 1
     return count
+
+
+def _build_search_window(
+    moment_ts: float,
+    segment: TranscriptSegment,
+    max_window_sec: float,
+) -> tuple[float, float]:
+    """Compute the (start, end) timestamps for the forward-search window.
+
+    The window starts at the LLM's moment timestamp and ends at the earlier of:
+    - The end of the transcript segment the moment falls into.
+    - ``moment_ts + max_window_sec``.
+    """
+    end = min(segment.end, moment_ts + max_window_sec)
+    return moment_ts, end
+
+
+def _is_stable(
+    frame: np.ndarray,
+    prev: np.ndarray,
+    nxt: np.ndarray,
+    threshold: float,
+) -> bool:
+    """Bidirectional SSIM check: a frame is stable if both neighbors are similar."""
+    from peeklet.core.comparator import compare_frames
+
+    prev_result = compare_frames(frame, prev)
+    next_result = compare_frames(frame, nxt)
+    return prev_result.ssim_score > threshold and next_result.ssim_score > threshold
+
+
+def _is_gallery_frame(frame: np.ndarray, downscale_dim: int, min_words: int) -> bool:
+    """Return True if the frame has too few visible words to be demo content."""
+    return _count_words_in_frame(frame, downscale_dim) < min_words
