@@ -265,8 +265,11 @@ def _run_image_mode(
     pipeline.finalize()
     output_dir = Path(config.exporter.output_dir)
 
-    # Image mode has no real "duration" — pass 0.0 and use the directory
-    # name as the source. Transcript segments are empty for image input.
+    # Image mode has no inherent timeline. We pass duration=0.0 as a
+    # sentinel (image input is a sequence, not a stream) and use the
+    # input directory name as the "source" identifier so downstream
+    # context consumers have something to display. Transcript segments
+    # are always empty for image input — there's no narration to align.
     _write_context_outputs(
         source_name=input_dir.name,
         duration=0.0,

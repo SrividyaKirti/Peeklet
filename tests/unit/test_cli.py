@@ -65,7 +65,10 @@ class TestCli:
         assert result.exit_code == 0
 
     def test_image_mode_writes_context_files(self, tmp_path: Path) -> None:
-        """Image mode produces context.json and context.md alongside the manifest."""
+        """Image mode produces context.json and context.md alongside the
+        manifest, with real content (not just empty placeholder files)."""
+        import json
+
         input_dir = tmp_path / "input"
         output_dir = tmp_path / "output"
         _create_test_images(input_dir, count=5)
@@ -80,6 +83,21 @@ class TestCli:
         assert (output_dir / "manifest.parquet").exists()
         assert (output_dir / "context.json").exists()
         assert (output_dir / "context.md").exists()
+
+        # Verify the context.json has real content, not an empty placeholder.
+        ctx = json.loads((output_dir / "context.json").read_text())
+        assert "video" in ctx
+        assert "screenshots" in ctx
+        # The 5 progressively-different test frames should yield at least one
+        # keyframe / screenshot. If results.append in _run_image_mode regresses,
+        # this assertion catches it.
+        assert ctx["video"]["total_screenshots"] >= 1
+        assert len(ctx["screenshots"]) >= 1
+        assert ctx["video"]["filename"] == "input"
+
+        # The context.md should be non-empty.
+        md_content = (output_dir / "context.md").read_text()
+        assert len(md_content) > 0
 
     def test_missing_input_dir_errors(self) -> None:
         runner = CliRunner()
