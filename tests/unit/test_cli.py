@@ -99,6 +99,56 @@ class TestCli:
         md_content = (output_dir / "context.md").read_text()
         assert len(md_content) > 0
 
+    def test_format_flag_png_produces_png_keyframes(self, tmp_path: Path) -> None:
+        """--format png produces .png keyframe images."""
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        _create_test_images(input_dir, count=5)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(input_dir),
+                "--output",
+                str(output_dir),
+                "--format",
+                "png",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        png_files = list(output_dir.glob("*.png"))
+        jpg_files = list(output_dir.glob("*.jpg"))
+        assert len(png_files) >= 1, "expected at least one PNG keyframe"
+        assert len(jpg_files) == 0, "no JPG keyframes should be present"
+
+    def test_format_flag_jpg_produces_jpg_keyframes(self, tmp_path: Path) -> None:
+        """--format jpg (the existing default) produces .jpg keyframe images."""
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        _create_test_images(input_dir, count=5)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--input",
+                str(input_dir),
+                "--output",
+                str(output_dir),
+                "--format",
+                "jpg",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        jpg_files = list(output_dir.glob("*.jpg"))
+        png_files = list(output_dir.glob("*.png"))
+        assert len(jpg_files) >= 1, "expected at least one JPG keyframe"
+        assert len(png_files) == 0
+
     def test_missing_input_dir_errors(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["--input", "/nonexistent/dir"])

@@ -131,17 +131,25 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     help="LLM model identifier for --demo-mode. "
     "Defaults to the value in config.demo_filter.llm_model.",
 )
+@click.option(
+    "--format",
+    "keyframe_format",
+    type=click.Choice(["png", "jpg"]),
+    default=None,
+    help="Keyframe image format. Overrides config.exporter.keyframe_format.",
+)
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(
     input_path: Path,
     output_dir: Path,
     config_path: Path | None,
-    no_audio: bool,
-    mode: str | None,
-    transcript_path: Path | None,
     demo_mode: bool,
-    llm_provider: str | None,
+    keyframe_format: str | None,
     llm_model: str | None,
+    llm_provider: str | None,
+    mode: str | None,
+    no_audio: bool,
+    transcript_path: Path | None,
 ) -> None:
     """Smart screenshot change detection.
 
@@ -154,6 +162,8 @@ def main(
     if transcript_path:
         config.video.transcript_path = str(transcript_path)
     config.exporter.output_dir = str(output_dir)
+    if keyframe_format is not None:
+        config.exporter.keyframe_format = keyframe_format  # type: ignore[assignment]
 
     if demo_mode:
         if not transcript_path:
