@@ -1,6 +1,6 @@
 """Tests for shared type definitions."""
 
-from peeklet.utils.types import EventType, FrameMeta, FrameResult, Region
+from peeklet.utils.types import ContentSegment, EventType, FrameMeta, FrameResult, Region
 
 
 class TestRegion:
@@ -145,8 +145,6 @@ class TestFrameResultVideoFields:
 
 
 def test_content_segment_basic():
-    from peeklet.utils.types import ContentSegment
-
     seg = ContentSegment(start_sec=0.0, end_sec=30.0, is_demo=True, text_density=12.5)
     assert seg.start_sec == 0.0
     assert seg.end_sec == 30.0
@@ -155,10 +153,6 @@ def test_content_segment_basic():
 
 
 def test_frame_result_demo_fields_default_none():
-    from datetime import datetime  # noqa: F401  (imported for type completeness)
-
-    from peeklet.utils.types import EventType, FrameResult
-
     r = FrameResult(
         frame_id="f",
         event_type=EventType.SKIPPED,
