@@ -64,6 +64,41 @@ def format_transcript_for_llm(segments: list[TranscriptSegment]) -> str:
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?|\n?```\s*$", re.MULTILINE)
 
 
+def _extract_json_array(text: str, raw_for_error: str) -> str:
+    """Find the substring containing a top-level JSON array.
+
+    Walks ``text`` looking for the first ``[`` and the matching ``]``,
+    accounting for nesting and strings. Tolerates LLM preambles like
+    'Here is the JSON: [...]' that survive simple fence stripping.
+    """
+    start = text.find("[")
+    if start == -1:
+        raise LLMResponseError(f"LLM output contained no JSON array. Raw output:\n{raw_for_error}")
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise LLMResponseError(f"LLM output had unclosed JSON array. Raw output:\n{raw_for_error}")
+
+
 def _parse_moments_json(raw: str, video_duration: float) -> list[Moment]:
     """Parse the raw LLM string into a sorted list of valid Moments.
 
@@ -73,6 +108,7 @@ def _parse_moments_json(raw: str, video_duration: float) -> list[Moment]:
       missing a required key.
     """
     cleaned = _FENCE_RE.sub("", raw).strip()
+    cleaned = _extract_json_array(cleaned, raw)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:

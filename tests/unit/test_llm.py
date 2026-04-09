@@ -106,3 +106,35 @@ def test_build_llm_client_openai_missing_key_raises(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         build_llm_client(provider="openai", model="gpt-4o-mini")
+
+
+def test_parse_moments_strips_preamble_before_json():
+    from peeklet.core.llm import _parse_moments_json
+
+    raw = (
+        "Here is the JSON you asked for:\n"
+        '```json\n[{"timestamp": 7.0, "caption": "c", "reason": "r"}]\n```'
+    )
+    moments = _parse_moments_json(raw, video_duration=60.0)
+
+    assert len(moments) == 1
+    assert moments[0].timestamp == 7.0
+
+
+def test_parse_moments_handles_nested_brackets_in_strings():
+    from peeklet.core.llm import _parse_moments_json
+
+    raw = '[{"timestamp": 1.0, "caption": "uses [brackets] in caption", "reason": "r"}]'
+    moments = _parse_moments_json(raw, video_duration=60.0)
+
+    assert len(moments) == 1
+    assert moments[0].caption == "uses [brackets] in caption"
+
+
+def test_parse_moments_raises_when_no_array():
+    import pytest
+
+    from peeklet.core.llm import LLMResponseError, _parse_moments_json
+
+    with pytest.raises(LLMResponseError, match="no JSON array"):
+        _parse_moments_json("just some prose, no array", video_duration=60.0)
