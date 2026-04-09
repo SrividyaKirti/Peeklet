@@ -1,6 +1,6 @@
 """Tests for shared type definitions."""
 
-from peeklet.utils.types import EventType, FrameMeta, FrameResult, Region
+from peeklet.utils.types import EventType, FrameMeta, FrameResult, Moment, Region
 
 
 class TestRegion:
@@ -142,3 +142,33 @@ class TestFrameResultVideoFields:
         assert result.video_duration == 120.0
         assert result.change_magnitude == "major"
         assert result.trigger_type == "visual_change"
+
+
+def test_moment_basic():
+    seg = Moment(
+        timestamp=12.5, caption="Settings page open", reason="speaker says 'show settings'"
+    )
+    assert seg.timestamp == 12.5
+    assert seg.caption == "Settings page open"
+    assert seg.reason == "speaker says 'show settings'"
+
+
+def test_moment_is_frozen():
+    import pytest
+
+    seg = Moment(timestamp=0.0, caption="x", reason="y")
+    with pytest.raises((AttributeError, TypeError)):
+        seg.timestamp = 1.0  # type: ignore[misc]
+
+
+def test_frame_result_llm_fields_default_none():
+    r = FrameResult(
+        frame_id="f",
+        event_type=EventType.SKIPPED,
+        is_keyframe=False,
+        perceptual_hash="0" * 16,
+        frame_width=10,
+        frame_height=10,
+    )
+    assert r.llm_caption is None
+    assert r.llm_reason is None

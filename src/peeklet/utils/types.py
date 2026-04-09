@@ -35,6 +35,15 @@ class Region:
 
 
 @dataclass(frozen=True, slots=True)
+class Moment:
+    """An LLM-picked screenshot-worthy moment in a video transcript."""
+
+    timestamp: float  # seconds into the video
+    caption: str  # one-sentence description of what the screenshot should show
+    reason: str  # one-sentence justification quoting the speaker's words
+
+
+@dataclass(frozen=True, slots=True)
 class FrameMeta:
     """Metadata about a frame provided by the caller."""
 
@@ -80,3 +89,6 @@ class FrameResult:
     total_keyframes: int | None = None
     video_duration: float | None = None
     change_magnitude: str | None = None
+    # Demo-mode fields populated by the transcript-driven demo filter.
+    llm_caption: str | None = None
+    llm_reason: str | None = None

@@ -80,6 +80,27 @@ class VideoConfig(BaseModel):
     processing_max_dim: int | None = Field(default=720, gt=0)
 
 
+class DemoFilterConfig(BaseModel):
+    """Demo-mode frame filtering settings.
+
+    Activated via the CLI ``--demo-mode`` flag. The LLM picks screenshot-worthy
+    moments from the transcript and Peeklet picks the exact frame for each
+    moment using forward-search bidirectional SSIM stability plus an OCR
+    gallery check. See the design spec for full details.
+    """
+
+    enabled: bool = False
+    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    llm_model: str = "claude-haiku-4-5"
+    # Frame search and selection
+    frame_search_resolution: int = Field(default=360, gt=0)
+    ssim_stability_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
+    forward_search_step_sec: float = Field(default=0.5, gt=0.0)
+    forward_search_window_max_sec: float = Field(default=5.0, gt=0.0)
+    # Gallery detection (reuses _count_words_in_frame)
+    gallery_min_words: int = Field(default=5, ge=0)
+
+
 class PeekletConfig(BaseModel):
     """Root configuration for Peeklet."""
 
@@ -90,6 +111,7 @@ class PeekletConfig(BaseModel):
     exporter: ExporterConfig = Field(default_factory=ExporterConfig)
     input: InputConfig = Field(default_factory=InputConfig)
     video: VideoConfig = Field(default_factory=VideoConfig)
+    demo_filter: DemoFilterConfig = Field(default_factory=DemoFilterConfig)
 
 
 def load_config(path: Path | None) -> PeekletConfig:

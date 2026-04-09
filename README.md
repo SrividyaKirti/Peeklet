@@ -52,6 +52,45 @@ peeklet --input recording.mp4 --output ./output --transcript captions.srt
 peeklet --input ./screenshots --output ./output --config config.yaml
 ```
 
+### Demo mode (transcript-driven)
+
+For demo videos with narration, use `--demo-mode` to have an LLM pick the
+screenshot-worthy moments from the transcript. Peeklet then uses its
+frame-level intelligence (forward search + bidirectional SSIM stability +
+OCR gallery check) to pick the exact frame for each moment.
+
+```bash
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
+peeklet --input demo.mp4 --transcript demo.srt --demo-mode --output ./out
+```
+
+`--demo-mode` requires:
+- A video input (single file)
+- A transcript file via `--transcript` (SRT, VTT, or Fathom-style markdown)
+- The matching API key env var for the chosen LLM provider
+- The `[demo]` extra installed: `pip install peeklet[demo]`
+- The `[video]` extra (for the OCR gallery check): `pip install peeklet[video]`
+- The `tesseract` binary (`brew install tesseract` on macOS,
+  `apt install tesseract-ocr` on Linux)
+
+**Provider selection:**
+
+```bash
+# Use a different Anthropic model
+peeklet ... --demo-mode --llm-model "claude-haiku-4-5"
+
+# Use OpenAI
+peeklet ... --demo-mode --llm-provider openai --llm-model "gpt-4o-mini"
+
+# Use a local Ollama model via OpenAI-compatible endpoint
+export OPENAI_API_KEY=ollama
+export OPENAI_BASE_URL=http://localhost:11434/v1
+peeklet ... --demo-mode --llm-provider openai --llm-model "llama3"
+```
+
+See `docs/superpowers/specs/2026-04-09-transcript-driven-demo-mode-design.md`
+for the full algorithm.
+
 ### Python Library
 
 ```python

@@ -79,6 +79,32 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     default=None,
     help="Path to SRT or VTT transcript file.",
 )
+@click.option(
+    "--demo-mode",
+    "demo_mode",
+    is_flag=True,
+    default=False,
+    help="Use the LLM to pick screenshot-worthy moments from the transcript "
+    "and Peeklet to pick the actual frames. Requires --transcript and a video input.",
+)
+@click.option(
+    "--llm-provider",
+    "llm_provider",
+    type=click.Choice(["anthropic", "openai"]),
+    default=None,
+    envvar="PEEKLET_LLM_PROVIDER",
+    help="LLM provider for --demo-mode (anthropic or openai). "
+    "Defaults to the value in config.demo_filter.llm_provider.",
+)
+@click.option(
+    "--llm-model",
+    "llm_model",
+    type=str,
+    default=None,
+    envvar="PEEKLET_LLM_MODEL",
+    help="LLM model identifier for --demo-mode. "
+    "Defaults to the value in config.demo_filter.llm_model.",
+)
 @click.version_option(version=peeklet.__version__, prog_name="peeklet")
 def main(
     input_path: Path,
@@ -87,6 +113,9 @@ def main(
     no_audio: bool,
     mode: str | None,
     transcript_path: Path | None,
+    demo_mode: bool,
+    llm_provider: str | None,
+    llm_model: str | None,
 ) -> None:
     """Smart screenshot change detection.
 
@@ -100,8 +129,23 @@ def main(
         config.video.transcript_path = str(transcript_path)
     config.exporter.output_dir = str(output_dir)
 
+    if demo_mode:
+        if not transcript_path:
+            raise click.UsageError(
+                "--demo-mode requires --transcript. Demo mode needs both a "
+                "video and a transcript to filter frames effectively."
+            )
+        config.demo_filter.enabled = True
+        if llm_provider is not None:
+            config.demo_filter.llm_provider = llm_provider  # type: ignore[assignment]
+        if llm_model is not None:
+            config.demo_filter.llm_model = llm_model
+
     image_extensions = {f".{fmt}" for fmt in config.input.supported_formats}
     detected_mode = _detect_mode(input_path, mode, image_extensions)
+
+    if demo_mode and detected_mode != "video":
+        raise click.UsageError("--demo-mode only applies to video inputs.")
 
     if detected_mode == "video":
         _run_video_mode(input_path, config)

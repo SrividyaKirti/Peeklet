@@ -274,3 +274,108 @@ class TestVideoCliDetection:
         assert result.exit_code != 0
         assert "transcript" in result.output.lower()
         assert "single video" in result.output.lower()
+
+
+def test_cli_demo_mode_requires_transcript(tmp_path):
+    """--demo-mode without --transcript exits with a clear error."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["--input", str(video_path), "--output", str(tmp_path / "out"), "--demo-mode"],
+    )
+    assert result.exit_code == 2
+    assert "--demo-mode requires --transcript" in result.output
+
+
+def test_cli_demo_mode_requires_video(tmp_path):
+    """--demo-mode without a video input exits with a clear error."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+
+    images_dir = tmp_path / "imgs"
+    images_dir.mkdir()
+    (images_dir / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(images_dir),
+            "--output",
+            str(tmp_path / "out"),
+            "--mode",
+            "image",
+            "--transcript",
+            str(transcript),
+            "--demo-mode",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--demo-mode only applies to video inputs" in result.output
+
+
+def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
+    """--llm-provider and --llm-model end up on config.demo_filter."""
+    from click.testing import CliRunner
+
+    from peeklet.cli import main
+    from peeklet.core import video as video_module
+    from tests.unit.helpers_video import write_synthetic_video
+
+    video_path = tmp_path / "v.mp4"
+    write_synthetic_video(video_path, duration_sec=2, fps=10, width=64, height=64)
+    transcript = tmp_path / "t.srt"
+    transcript.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+
+    captured = {}
+
+    real_process_video = video_module.process_video
+
+    def spy_process_video(path, config, **kwargs):
+        captured["enabled"] = config.demo_filter.enabled
+        captured["provider"] = config.demo_filter.llm_provider
+        captured["model"] = config.demo_filter.llm_model
+        return real_process_video(path, config, **kwargs)
+
+    monkeypatch.setattr(video_module, "process_video", spy_process_video)
+    # Stub out the demo filter so the test doesn't need a real LLM call.
+    # Patch on video_module — that's where process_video has imported the
+    # symbol. Patching df_module would not affect the already-imported reference.
+    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--input",
+            str(video_path),
+            "--output",
+            str(tmp_path / "out"),
+            "--no-audio",
+            "--transcript",
+            str(transcript),
+            "--demo-mode",
+            "--llm-provider",
+            "openai",
+            "--llm-model",
+            "gpt-4o-mini",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "enabled": True,
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+    }

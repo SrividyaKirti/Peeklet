@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -20,10 +21,13 @@ from peeklet.core.context_exporter import (
     write_context_json,
     write_context_markdown,
 )
+from peeklet.core.demo_filter import apply_demo_filter
 from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
 from peeklet.utils.types import EventType
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -201,6 +205,48 @@ class VideoDecoder:
 
         container.close()
 
+    def extract_frame_at(self, timestamp_sec: float) -> tuple[np.ndarray, float, int]:
+        """Extract a single frame at (or just after) ``timestamp_sec``.
+
+        Seeks to the nearest keyframe before the requested timestamp via
+        libav and decodes forward until a frame at-or-past the target is
+        found. Returns ``(frame_rgb, actual_timestamp, frame_number)``.
+
+        Used by demo-mode's sparse OCR sweep where we only need a few
+        frames spread across the video, not a continuous range.
+
+        Raises:
+            RuntimeError: if no frame can be decoded at or after the
+                requested timestamp (e.g., timestamp past end of video).
+        """
+        import av
+
+        container = av.open(str(self._path))
+        try:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+
+            target_ts = int(timestamp_sec * av.time_base)
+            container.seek(target_ts)
+
+            for frame in container.decode(stream):
+                if frame.pts is None or stream.time_base is None:
+                    continue
+                ts = float(frame.pts * stream.time_base)
+                if ts + 1e-6 < timestamp_sec:
+                    continue
+                arr = frame.to_ndarray(format="rgb24")
+                rgb = ensure_rgb_uint8(np.asarray(arr))
+                frame_num = int(round(ts * self._fps))
+                return rgb, ts, frame_num
+
+            raise RuntimeError(
+                f"No frame found at or after timestamp {timestamp_sec}s "
+                f"in {self._path.name} (duration={self._duration}s)"
+            )
+        finally:
+            container.close()
+
 
 def _change_magnitude(result: FrameResult) -> str:
     """Derive change magnitude from SSIM and block count."""
@@ -279,6 +325,31 @@ def process_video(
             path=output_dir / "manifest.parquet",
             compression=config.exporter.parquet_compression,
         )
+
+    # Demo mode: bypass the coarse pass entirely. The LLM picks moments,
+    # Stage B picks frames, and we write outputs directly.
+    if config.demo_filter.enabled:
+        demo_transcript: list[TranscriptSegment] = []
+        if config.video.transcript_path:
+            demo_transcript = parse_transcript(Path(config.video.transcript_path))
+
+        demo_results = apply_demo_filter(
+            decoder=decoder,
+            transcript=demo_transcript,
+            config=config.demo_filter,
+            output_dir=output_dir,
+        )
+
+        ctx = build_context(meta.filename, meta.duration, demo_results, demo_transcript)
+        write_context_json(ctx, output_dir / "context.json")
+        write_context_markdown(ctx, output_dir / "context.md")
+
+        for r in demo_results:
+            writer.append(r)
+        if owns_writer:
+            writer.flush()
+
+        return demo_results
 
     # Adaptive masking is designed for screencasts (cursor/clock noise).
     # In video mode it both adds significant overhead and tends to mask out
