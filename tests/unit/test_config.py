@@ -149,3 +149,17 @@ class TestVideoConfig:
         assert config.video.formats == ["mp4", "webm"]
         assert config.video.audio_detection is False
         assert config.video.transcript_path == "/tmp/captions.srt"
+
+
+def test_demo_filter_config_defaults():
+    from peeklet.config import PeekletConfig
+
+    cfg = PeekletConfig()
+    assert cfg.demo_filter.enabled is False
+    assert cfg.demo_filter.ocr_sample_interval_sec == 30.0
+    assert cfg.demo_filter.ocr_downscale_dim == 360
+    assert cfg.demo_filter.ocr_min_words == 5
+    assert cfg.demo_filter.major_change_ssim == 0.70
+    assert cfg.demo_filter.major_change_blocks == 15
+    assert cfg.demo_filter.visual_change_weight == 0.7
+    assert cfg.demo_filter.text_density_weight == 0.3

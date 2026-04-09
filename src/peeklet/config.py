@@ -80,6 +80,24 @@ class VideoConfig(BaseModel):
     processing_max_dim: int | None = Field(default=720, gt=0)
 
 
+class DemoFilterConfig(BaseModel):
+    """Demo-mode frame filtering settings.
+
+    Activated via the CLI ``--demo-mode`` flag. When enabled, runs a sparse
+    OCR sweep to classify content type and uses the transcript to anchor
+    keyframe selection. See the design spec for full details.
+    """
+
+    enabled: bool = False
+    ocr_sample_interval_sec: float = Field(default=30.0, gt=0.0)
+    ocr_downscale_dim: int = Field(default=360, gt=0)
+    ocr_min_words: int = Field(default=5, ge=0)
+    major_change_ssim: float = Field(default=0.70, ge=0.0, le=1.0)
+    major_change_blocks: int = Field(default=15, ge=0)
+    visual_change_weight: float = Field(default=0.7, ge=0.0)
+    text_density_weight: float = Field(default=0.3, ge=0.0)
+
+
 class PeekletConfig(BaseModel):
     """Root configuration for Peeklet."""
 
@@ -90,6 +108,7 @@ class PeekletConfig(BaseModel):
     exporter: ExporterConfig = Field(default_factory=ExporterConfig)
     input: InputConfig = Field(default_factory=InputConfig)
     video: VideoConfig = Field(default_factory=VideoConfig)
+    demo_filter: DemoFilterConfig = Field(default_factory=DemoFilterConfig)
 
 
 def load_config(path: Path | None) -> PeekletConfig:
