@@ -9,15 +9,19 @@ gallery check. See the design spec at
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from peeklet.core.exporter import save_keyframe
+from peeklet.utils.types import EventType, FrameResult
+
 if TYPE_CHECKING:
-    from peeklet.config import DemoFilterConfig  # noqa: F401  (used in Tasks 8/9)
+    from peeklet.config import DemoFilterConfig
     from peeklet.core.audio import TranscriptSegment
-    from peeklet.core.video import VideoDecoder  # noqa: F401  (used in Tasks 8/9)
-    from peeklet.utils.types import FrameResult, Moment  # noqa: F401  (used in Tasks 8/9)
+    from peeklet.core.video import VideoDecoder
+    from peeklet.utils.types import Moment
 
 logger = logging.getLogger(__name__)
 
@@ -119,3 +123,152 @@ def _is_stable(
 def _is_gallery_frame(frame: np.ndarray, downscale_dim: int, min_words: int) -> bool:
     """Return True if the frame has too few visible words to be demo content."""
     return _count_words_in_frame(frame, downscale_dim) < min_words
+
+
+def _find_segment_for_timestamp(
+    ts: float, transcript: list[TranscriptSegment]
+) -> TranscriptSegment | None:
+    """Return the transcript segment containing ``ts``, or None."""
+    for seg in transcript:
+        if seg.start <= ts <= seg.end:
+            return seg
+    return None
+
+
+def _sample_window_frames(
+    decoder: VideoDecoder,
+    start: float,
+    end: float,
+    step: float,
+) -> list[tuple[np.ndarray, float, int]]:
+    """Decode a small set of frames from the search window."""
+    if end <= start:
+        try:
+            return [decoder.extract_frame_at(start)]
+        except Exception as exc:
+            logger.warning("Failed to extract frame at %.2fs: %s", start, exc)
+            return []
+    timestamps: list[float] = []
+    t = start
+    while t <= end + 1e-6:
+        timestamps.append(round(t, 6))
+        t += step
+    samples: list[tuple[np.ndarray, float, int]] = []
+    for ts in timestamps:
+        try:
+            samples.append(decoder.extract_frame_at(ts))
+        except Exception as exc:
+            logger.warning("Failed to extract frame at %.2fs: %s", ts, exc)
+    return samples
+
+
+def _pick_stable_index(
+    samples: list[tuple[np.ndarray, float, int]],
+    threshold: float,
+) -> int:
+    """Return the index of the first sample whose two neighbors are SSIM-similar.
+
+    Falls back to index 0 if no sample passes the bidirectional check (or if
+    the window has fewer than 3 samples to compare).
+    """
+    if len(samples) < 3:
+        return 0
+    for i in range(1, len(samples) - 1):
+        frame, _, _ = samples[i]
+        prev_frame, _, _ = samples[i - 1]
+        next_frame, _, _ = samples[i + 1]
+        if _is_stable(frame, prev_frame, next_frame, threshold):
+            return i
+    return 0
+
+
+def select_frames_for_moments(
+    decoder: VideoDecoder,
+    moments: list[Moment],
+    transcript: list[TranscriptSegment],
+    config: DemoFilterConfig,
+    output_dir: Path,
+) -> list[FrameResult]:
+    """Stage B: for each LLM-picked moment, find the best actual frame.
+
+    Walks each moment, builds a forward search window inside the current
+    transcript segment, samples frames at ``forward_search_step_sec`` intervals,
+    picks the first bidirectionally-stable frame, runs the gallery check, and
+    saves the surviving frame as a keyframe.
+    """
+    output_dir = Path(output_dir)
+    meta = decoder.get_metadata()
+    results: list[FrameResult] = []
+
+    for idx, moment in enumerate(moments, start=1):
+        seg = _find_segment_for_timestamp(moment.timestamp, transcript)
+        if seg is None:
+            logger.warning(
+                "LLM moment at %.2fs ('%s') has no matching transcript segment, skipping",
+                moment.timestamp,
+                moment.caption,
+            )
+            continue
+
+        win_start, win_end = _build_search_window(
+            moment_ts=moment.timestamp,
+            segment=seg,
+            max_window_sec=config.forward_search_window_max_sec,
+        )
+        samples = _sample_window_frames(
+            decoder=decoder,
+            start=win_start,
+            end=win_end,
+            step=config.forward_search_step_sec,
+        )
+        if not samples:
+            logger.warning(
+                "No frames could be extracted for moment at %.2fs, skipping",
+                moment.timestamp,
+            )
+            continue
+
+        picked_idx = _pick_stable_index(samples, config.ssim_stability_threshold)
+        picked_frame, picked_ts, picked_frame_num = samples[picked_idx]
+
+        if _is_gallery_frame(
+            picked_frame,
+            downscale_dim=config.frame_search_resolution,
+            min_words=config.gallery_min_words,
+        ):
+            logger.warning(
+                "LLM picked moment at %.2fs ('%s') but the frame is gallery-view "
+                "or blank — no demo content visible. Skipping.",
+                moment.timestamp,
+                moment.caption,
+            )
+            continue
+
+        frame_id = f"demo_{idx:04d}_{int(picked_ts):04d}s"
+        asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
+
+        results.append(
+            FrameResult(
+                frame_id=frame_id,
+                event_type=EventType.KEYFRAME,
+                is_keyframe=True,
+                perceptual_hash="",  # not computed in demo mode
+                frame_width=picked_frame.shape[1],
+                frame_height=picked_frame.shape[0],
+                source_format="video",
+                asset_path=str(asset_path),
+                trigger_type="transcript_trigger",
+                source_video=meta.filename,
+                video_timestamp=picked_ts,
+                video_frame_number=picked_frame_num,
+                video_duration=meta.duration,
+                llm_caption=moment.caption,
+                llm_reason=moment.reason,
+                keyframe_index=idx,
+            )
+        )
+
+    # Backfill total_keyframes
+    for r in results:
+        r.total_keyframes = len(results)
+    return results

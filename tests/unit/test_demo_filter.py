@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -153,3 +153,129 @@ def test_is_gallery_frame_returns_false_above_threshold():
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=10):
         assert _is_gallery_frame(frame, downscale_dim=360, min_words=5) is False
+
+
+def _make_decoder_for_moments(meta_duration: float = 60.0):
+    """Create a decoder mock that returns a deterministic frame per timestamp."""
+    decoder = MagicMock()
+    decoder.get_metadata.return_value = MagicMock(duration=meta_duration, filename="t.mp4")
+
+    def _fake_extract(ts: float):
+        val = int((ts * 10) % 256)
+        return np.full((100, 100, 3), val, dtype=np.uint8), float(ts), int(ts * 30)
+
+    decoder.extract_frame_at.side_effect = _fake_extract
+    return decoder
+
+
+def test_select_frames_for_moments_picks_first_stable_frame(tmp_path, monkeypatch):
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+
+    moments = [Moment(timestamp=10.0, caption="cap", reason="reason")]
+    transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
+    cfg = DemoFilterConfig(
+        enabled=True,
+        ssim_stability_threshold=0.92,
+        forward_search_step_sec=0.5,
+        forward_search_window_max_sec=5.0,
+        gallery_min_words=0,
+    )
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.is_keyframe is True
+    assert r.llm_caption == "cap"
+    assert r.llm_reason == "reason"
+    # With all-identical frames, _pick_stable_index returns index 1 (first
+    # checkable position) → ts == 10.5. Just assert the picked frame is in
+    # the search window.
+    assert r.video_timestamp is not None
+    assert 10.0 <= r.video_timestamp <= 12.0
+    assert r.trigger_type == "transcript_trigger"
+
+
+def test_select_frames_for_moments_drops_gallery_frames(tmp_path, monkeypatch):
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.zeros((100, 100, 3), dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+
+    moments = [Moment(timestamp=10.0, caption="cap", reason="reason")]
+    transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=5)
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._count_words_in_frame",
+        lambda frame, downscale_dim: 0,
+    )
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert results == []
+
+
+def test_select_frames_for_moments_drops_moment_with_no_segment(tmp_path, monkeypatch):
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments()
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+    moments = [Moment(timestamp=50.0, caption="c", reason="r")]
+    transcript = [TranscriptSegment(start=0.0, end=10.0, text="x")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert results == []
