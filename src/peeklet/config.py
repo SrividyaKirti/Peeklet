@@ -90,7 +90,7 @@ class DemoFilterConfig(BaseModel):
     """
 
     enabled: bool = False
-    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    llm_provider: Literal["anthropic", "openai", "openrouter"] = "anthropic"
     llm_model: str = "claude-haiku-4-5"
     # Frame search and selection
     frame_search_resolution: int = Field(default=360, gt=0)

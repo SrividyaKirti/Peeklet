@@ -29,6 +29,39 @@ except ImportError:  # pragma: no cover - exercised when [demo] extra not instal
     openai = None  # type: ignore[assignment]
 
 
+def _call_openai_chat_with_retry(
+    client: object,
+    model: str,
+    user_message: str,
+    video_duration: float,
+    *,
+    provider_label: str,
+) -> list[Moment]:
+    """Call an OpenAI-compatible chat completions endpoint with one retry on bad JSON.
+
+    Shared by OpenAIClient and OpenRouterClient — both speak the same wire
+    protocol, so the only thing that differs is which SDK instance is passed
+    in and what label appears in the retry log line.
+    """
+    for attempt in (1, 2):
+        response = client.chat.completions.create(  # type: ignore[attr-defined]
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+        try:
+            return _parse_moments_json(raw, video_duration)
+        except LLMResponseError:
+            if attempt == 2:
+                raise
+            logger.warning("%s returned unparseable JSON, retrying once", provider_label)
+
+    raise AssertionError("retry loop exited without returning")
+
+
 class OpenAIClient:
     """Calls the OpenAI chat completions API once per video."""
 
@@ -50,21 +83,10 @@ class OpenAIClient:
         self, transcript: list[TranscriptSegment], video_duration: float
     ) -> list[Moment]:
         user_message = format_transcript_for_llm(transcript)
-
-        for attempt in (1, 2):
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message},
-                ],
-            )
-            raw = response.choices[0].message.content or ""
-            try:
-                return _parse_moments_json(raw, video_duration)
-            except LLMResponseError:
-                if attempt == 2:
-                    raise
-                logger.warning("OpenAI returned unparseable JSON, retrying once")
-
-        raise AssertionError("retry loop exited without returning")
+        return _call_openai_chat_with_retry(
+            client=self._client,
+            model=self._model,
+            user_message=user_message,
+            video_duration=video_duration,
+            provider_label="OpenAI",
+        )

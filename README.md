@@ -88,6 +88,22 @@ export OPENAI_BASE_URL=http://localhost:11434/v1
 peeklet ... --demo-mode --llm-provider openai --llm-model "llama3"
 ```
 
+**Using OpenRouter** (single API key, hundreds of models):
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+peeklet \
+    --input video.mp4 \
+    --output out \
+    --transcript transcript.srt \
+    --demo-mode \
+    --llm-provider openrouter \
+    --llm-model anthropic/claude-3.5-sonnet
+```
+
+OpenRouter model ids are namespaced as `<vendor>/<model>` — see
+[openrouter.ai/models](https://openrouter.ai/models) for the full list.
+
 See `docs/superpowers/specs/2026-04-09-transcript-driven-demo-mode-design.md`
 for the full algorithm.
 
