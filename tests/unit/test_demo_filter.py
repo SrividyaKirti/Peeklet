@@ -279,3 +279,71 @@ def test_select_frames_for_moments_drops_moment_with_no_segment(tmp_path, monkey
     )
 
     assert results == []
+
+
+def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import apply_demo_filter
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+
+    fake_moments = [Moment(timestamp=10.0, caption="c", reason="r")]
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = fake_moments
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 200, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+
+    results = apply_demo_filter(
+        decoder=decoder,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    fake_client.pick_moments.assert_called_once_with(transcript, 60.0)
+    assert len(results) == 1
+    assert results[0].llm_caption == "c"
+
+
+def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.demo_filter import apply_demo_filter
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = []
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+
+    cfg = DemoFilterConfig(enabled=True)
+    with caplog.at_level(logging.WARNING):
+        results = apply_demo_filter(
+            decoder=decoder,
+            transcript=[],
+            config=cfg,
+            output_dir=tmp_path,
+        )
+
+    assert results == []
+    assert any("zero screenshot-worthy moments" in rec.message for rec in caplog.records)

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from peeklet.core.exporter import save_keyframe
+from peeklet.core.llm import build_llm_client
 from peeklet.utils.types import EventType, FrameResult
 
 if TYPE_CHECKING:
@@ -272,3 +273,34 @@ def select_frames_for_moments(
     for r in results:
         r.total_keyframes = len(results)
     return results
+
+
+def apply_demo_filter(
+    decoder: VideoDecoder,
+    transcript: list[TranscriptSegment],
+    config: DemoFilterConfig,
+    output_dir: Path,
+) -> list[FrameResult]:
+    """Top-level demo-mode entry point.
+
+    Builds the LLM client, asks it to pick screenshot-worthy moments from the
+    transcript, then runs Stage B (forward-search + stability + gallery check)
+    to pick the actual frames. Returns the curated keyframe list.
+    """
+    meta = decoder.get_metadata()
+    client = build_llm_client(provider=config.llm_provider, model=config.llm_model)
+
+    moments = client.pick_moments(transcript, meta.duration)
+    logger.info("LLM picked %d screenshot-worthy moments", len(moments))
+
+    if not moments:
+        logger.warning("LLM identified zero screenshot-worthy moments in this transcript.")
+        return []
+
+    return select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=config,
+        output_dir=output_dir,
+    )
