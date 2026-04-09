@@ -1,6 +1,6 @@
 """Tests for shared type definitions."""
 
-from peeklet.utils.types import ContentSegment, EventType, FrameMeta, FrameResult, Region
+from peeklet.utils.types import EventType, FrameMeta, FrameResult, Moment, Region
 
 
 class TestRegion:
@@ -144,15 +144,24 @@ class TestFrameResultVideoFields:
         assert result.trigger_type == "visual_change"
 
 
-def test_content_segment_basic():
-    seg = ContentSegment(start_sec=0.0, end_sec=30.0, is_demo=True, text_density=12.5)
-    assert seg.start_sec == 0.0
-    assert seg.end_sec == 30.0
-    assert seg.is_demo is True
-    assert seg.text_density == 12.5
+def test_moment_basic():
+    seg = Moment(
+        timestamp=12.5, caption="Settings page open", reason="speaker says 'show settings'"
+    )
+    assert seg.timestamp == 12.5
+    assert seg.caption == "Settings page open"
+    assert seg.reason == "speaker says 'show settings'"
 
 
-def test_frame_result_demo_fields_default_none():
+def test_moment_is_frozen():
+    import pytest
+
+    seg = Moment(timestamp=0.0, caption="x", reason="y")
+    with pytest.raises((AttributeError, TypeError)):
+        seg.timestamp = 1.0  # type: ignore[misc]
+
+
+def test_frame_result_llm_fields_default_none():
     r = FrameResult(
         frame_id="f",
         event_type=EventType.SKIPPED,
@@ -161,5 +170,5 @@ def test_frame_result_demo_fields_default_none():
         frame_width=10,
         frame_height=10,
     )
-    assert r.content_type is None
-    assert r.selection_reason is None
+    assert r.llm_caption is None
+    assert r.llm_reason is None
