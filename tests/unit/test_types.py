@@ -142,3 +142,30 @@ class TestFrameResultVideoFields:
         assert result.video_duration == 120.0
         assert result.change_magnitude == "major"
         assert result.trigger_type == "visual_change"
+
+
+def test_content_segment_basic():
+    from peeklet.utils.types import ContentSegment
+
+    seg = ContentSegment(start_sec=0.0, end_sec=30.0, is_demo=True, text_density=12.5)
+    assert seg.start_sec == 0.0
+    assert seg.end_sec == 30.0
+    assert seg.is_demo is True
+    assert seg.text_density == 12.5
+
+
+def test_frame_result_demo_fields_default_none():
+    from datetime import datetime  # noqa: F401  (imported for type completeness)
+
+    from peeklet.utils.types import EventType, FrameResult
+
+    r = FrameResult(
+        frame_id="f",
+        event_type=EventType.SKIPPED,
+        is_keyframe=False,
+        perceptual_hash="0" * 16,
+        frame_width=10,
+        frame_height=10,
+    )
+    assert r.content_type is None
+    assert r.selection_reason is None

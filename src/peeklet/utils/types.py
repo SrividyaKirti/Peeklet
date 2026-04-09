@@ -35,6 +35,16 @@ class Region:
 
 
 @dataclass(frozen=True, slots=True)
+class ContentSegment:
+    """A time range classified as demo screen-share or non-demo content."""
+
+    start_sec: float
+    end_sec: float
+    is_demo: bool
+    text_density: float  # average words detected per sampled frame in this range
+
+
+@dataclass(frozen=True, slots=True)
 class FrameMeta:
     """Metadata about a frame provided by the caller."""
 
@@ -80,3 +90,5 @@ class FrameResult:
     total_keyframes: int | None = None
     video_duration: float | None = None
     change_magnitude: str | None = None
+    content_type: Literal["demo", "non-demo"] | None = None
+    selection_reason: Literal["transcript_anchor", "major_change"] | None = None
