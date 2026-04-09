@@ -1,0 +1,78 @@
+"""End-to-end test for the --demo-mode video pipeline.
+
+Uses a tiny synthetic video and a fake LLM client (no real API calls). The
+fake client returns a hardcoded list of moments, and the test verifies that
+Stage B picks frames, applies the gallery check, and writes the manifest.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from tests.unit.helpers_video import write_synthetic_video
+
+
+@pytest.fixture
+def synthetic_video(tmp_path: Path) -> tuple[Path, Path]:
+    video_path = tmp_path / "demo.mp4"
+    write_synthetic_video(video_path, duration_sec=6, fps=10, width=64, height=64)
+
+    transcript_path = tmp_path / "demo.srt"
+    transcript_path.write_text(
+        "1\n00:00:00,500 --> 00:00:02,500\nhere is the first thing\n\n"
+        "2\n00:00:03,500 --> 00:00:05,500\nnow look at the second thing\n",
+        encoding="utf-8",
+    )
+    return video_path, transcript_path
+
+
+def test_demo_mode_end_to_end_with_fake_llm(
+    synthetic_video: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from peeklet.config import PeekletConfig
+    from peeklet.core import demo_filter as df_module
+    from peeklet.core.video import process_video
+    from peeklet.utils.types import Moment
+
+    video_path, transcript_path = synthetic_video
+
+    cfg = PeekletConfig()
+    cfg.exporter.output_dir = str(tmp_path / "out")
+    cfg.video.audio_detection = False
+    cfg.video.transcript_path = str(transcript_path)
+    cfg.demo_filter.enabled = True
+    cfg.demo_filter.gallery_min_words = 0  # disable gallery check for synthetic video
+
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = [
+        Moment(timestamp=1.5, caption="first thing", reason="speaker says here is the first thing"),
+        Moment(
+            timestamp=4.5,
+            caption="second thing",
+            reason="speaker says now look at the second thing",
+        ),
+    ]
+    monkeypatch.setattr(
+        df_module,
+        "build_llm_client",
+        lambda provider, model: fake_client,
+    )
+
+    results = process_video(video_path, cfg)
+
+    assert len(results) == 2
+    assert all(r.is_keyframe for r in results)
+    captions = [r.llm_caption for r in results]
+    assert "first thing" in captions
+    assert "second thing" in captions
+
+    # Outputs should be written
+    out_dir = Path(cfg.exporter.output_dir)
+    assert (out_dir / "manifest.parquet").exists()
+    assert (out_dir / "context.json").exists()
+    assert (out_dir / "context.md").exists()
