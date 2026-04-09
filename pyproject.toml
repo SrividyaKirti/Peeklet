@@ -37,6 +37,7 @@ video = [
     "imageio[ffmpeg]>=2.31",
     "av>=14.0",
     "pydub>=0.25",
+    "pytesseract>=0.3.10",
 ]
 dev = [
     "pytest>=7.0",
@@ -90,7 +91,7 @@ module = [
     "imageio.*",
     "imageio_ffmpeg.*",
     "pydub.*",
-
+    "pytesseract.*",
 ]
 ignore_missing_imports = true
 disallow_untyped_calls = false
