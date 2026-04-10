@@ -475,3 +475,257 @@ def test_apply_demo_filter_warns_when_pytesseract_unavailable(tmp_path, monkeypa
     assert any(
         "OCR" in rec.message and "gallery" in rec.message.lower() for rec in caplog.records
     ), f"expected an OCR-unavailable warning, got: {[r.message for r in caplog.records]}"
+
+
+# --- Dedup + tail-skip (PR A from 2026-04-10 demo-mode quality plan) ---
+
+
+def _patch_save_keyframe(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+
+def test_select_frames_for_moments_dedups_near_duplicate_second_moment(tmp_path, monkeypatch):
+    """Two moments whose candidate frames are identical → second is dropped."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=600.0)
+    # Every extracted frame is identical → SSIM == 1.0 → dedup must trigger.
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [
+        Moment(timestamp=10.0, caption="first", reason="r"),
+        Moment(timestamp=100.0, caption="second", reason="r"),
+    ]
+    transcript = [
+        TranscriptSegment(start=8.0, end=12.0, text="a"),
+        TranscriptSegment(start=98.0, end=102.0, text="b"),
+    ]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.95)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1
+    assert results[0].llm_caption == "first"
+
+
+def test_select_frames_for_moments_keeps_distinct_second_moment(tmp_path, monkeypatch):
+    """Two moments whose candidate frames are visually different → both kept."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=600.0)
+
+    # Frame fill differs by timestamp bucket → low SSIM between the two moments.
+    def _extract(ts: float):
+        fill = 20 if ts < 50.0 else 230
+        return np.full((100, 100, 3), fill, dtype=np.uint8), float(ts), int(ts * 30)
+
+    decoder.extract_frame_at.side_effect = _extract
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [
+        Moment(timestamp=10.0, caption="first", reason="r"),
+        Moment(timestamp=100.0, caption="second", reason="r"),
+    ]
+    transcript = [
+        TranscriptSegment(start=8.0, end=12.0, text="a"),
+        TranscriptSegment(start=98.0, end=102.0, text="b"),
+    ]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.95)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 2
+    assert [r.llm_caption for r in results] == ["first", "second"]
+
+
+def test_select_frames_for_moments_dedup_disabled_when_threshold_is_one(tmp_path, monkeypatch):
+    """dedup_ssim_threshold=1.0 disables dedup — identical frames still both saved."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=600.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [
+        Moment(timestamp=10.0, caption="a", reason="r"),
+        Moment(timestamp=100.0, caption="b", reason="r"),
+    ]
+    transcript = [
+        TranscriptSegment(start=8.0, end=12.0, text="x"),
+        TranscriptSegment(start=98.0, end=102.0, text="y"),
+    ]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=1.0)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 2
+
+
+def test_select_frames_for_moments_dedup_drops_all_when_threshold_is_zero(tmp_path, monkeypatch):
+    """dedup_ssim_threshold=0.0 drops every moment after the first if frames overlap at all."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=600.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [
+        Moment(timestamp=10.0, caption="a", reason="r"),
+        Moment(timestamp=100.0, caption="b", reason="r"),
+        Moment(timestamp=200.0, caption="c", reason="r"),
+    ]
+    transcript = [
+        TranscriptSegment(start=8.0, end=12.0, text="x"),
+        TranscriptSegment(start=98.0, end=102.0, text="y"),
+        TranscriptSegment(start=198.0, end=202.0, text="z"),
+    ]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.0)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1
+    assert results[0].llm_caption == "a"
+
+
+def test_select_frames_for_moments_tail_skip_drops_moment_past_cutoff(tmp_path, monkeypatch):
+    """Moment at 0.99 × duration is skipped when tail_skip_ratio=0.02."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=100.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    # 99.0 / 100.0 = 0.99 → past the 0.98 cutoff.
+    moments = [Moment(timestamp=99.0, caption="end", reason="r")]
+    transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert results == []
+
+
+def test_select_frames_for_moments_tail_skip_keeps_moment_before_cutoff(tmp_path, monkeypatch):
+    """Moment at 0.95 × duration is kept when tail_skip_ratio=0.02."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=100.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [Moment(timestamp=95.0, caption="near-end", reason="r")]
+    transcript = [TranscriptSegment(start=93.0, end=98.0, text="x")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1
+    assert results[0].llm_caption == "near-end"
+
+
+def test_select_frames_for_moments_tail_skip_disabled_when_ratio_is_zero(tmp_path, monkeypatch):
+    """tail_skip_ratio=0.0 disables the tail skip entirely — a 0.99-duration moment is kept."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=100.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [Moment(timestamp=99.0, caption="end", reason="r")]
+    transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.0)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1

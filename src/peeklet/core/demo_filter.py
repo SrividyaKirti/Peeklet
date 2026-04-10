@@ -205,11 +205,29 @@ def select_frames_for_moments(
     picks the first bidirectionally-stable frame, runs the gallery check, and
     saves the surviving frame as a keyframe.
     """
+    from peeklet.core.comparator import compare_frames
+
     output_dir = Path(output_dir)
     meta = decoder.get_metadata()
     results: list[FrameResult] = []
+    last_saved_frame: np.ndarray | None = None
+
+    tail_cutoff: float | None = None
+    if config.tail_skip_ratio > 0.0 and meta.duration > 0.0:
+        tail_cutoff = meta.duration * (1.0 - config.tail_skip_ratio)
 
     for idx, moment in enumerate(moments, start=1):
+        if tail_cutoff is not None and moment.timestamp >= tail_cutoff:
+            logger.info(
+                "Moment at %.2fs ('%s') falls in the final %.1f%% of the video "
+                "(cutoff %.2fs), skipping as meeting-end noise.",
+                moment.timestamp,
+                moment.caption,
+                config.tail_skip_ratio * 100.0,
+                tail_cutoff,
+            )
+            continue
+
         seg = _find_segment_for_timestamp(moment.timestamp, transcript)
         if seg is None:
             logger.warning(
@@ -253,8 +271,22 @@ def select_frames_for_moments(
             )
             continue
 
+        if last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
+            dedup_score = compare_frames(picked_frame, last_saved_frame).ssim_score
+            if dedup_score > config.dedup_ssim_threshold:
+                logger.info(
+                    "Moment at %.2fs ('%s') is a near-duplicate of the previous "
+                    "keyframe (ssim=%.3f > %.3f), skipping.",
+                    moment.timestamp,
+                    moment.caption,
+                    dedup_score,
+                    config.dedup_ssim_threshold,
+                )
+                continue
+
         frame_id = f"demo_{idx:04d}_{int(picked_ts * 1000):08d}ms"
         asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
+        last_saved_frame = picked_frame
 
         results.append(
             FrameResult(

@@ -108,6 +108,18 @@ class DemoFilterConfig(BaseModel):
     # silently flagging every demo frame as gallery view. Default 1920 leaves
     # 1080p and smaller frames untouched and downscales 4K to 1920 wide.
     gallery_ocr_min_dim: int = Field(default=1920, gt=0)
+    # Near-duplicate suppression: drop a moment whose candidate frame SSIMs
+    # above this threshold against the most recently saved keyframe. 1.0
+    # disables dedup; 0.0 drops every moment after the first. Only compared
+    # against the immediately previous keyframe, so a later moment that
+    # legitimately revisits an earlier page is still allowed through.
+    dedup_ssim_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
+    # Skip LLM moments whose timestamp falls in the final fraction of the
+    # video. Meeting recordings often continue past the end of the demo with
+    # social chatter, and the LLM sometimes grasps at those transcript
+    # tokens and picks a wrap-up frame with no meaningful content. 0.0
+    # disables the tail skip entirely.
+    tail_skip_ratio: float = Field(default=0.02, ge=0.0, le=0.5)
 
 
 class PeekletConfig(BaseModel):
