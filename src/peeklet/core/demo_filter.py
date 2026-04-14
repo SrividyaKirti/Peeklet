@@ -9,6 +9,7 @@ gallery check. See the design spec at
 from __future__ import annotations
 
 import logging
+from collections import namedtuple
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,8 @@ except ImportError:  # pragma: no cover - exercised in install-error path
 _MIN_WORD_LENGTH = 2
 _MIN_WORD_CONFIDENCE = 30
 
+WordBox = namedtuple("WordBox", ["text", "conf", "x", "y", "w", "h"])
+
 
 def _downscale_for_ocr(frame: np.ndarray, downscale_dim: int) -> np.ndarray:
     """Resize ``frame`` so its longest edge equals ``downscale_dim``.
@@ -54,27 +57,35 @@ def _downscale_for_ocr(frame: np.ndarray, downscale_dim: int) -> np.ndarray:
     return np.asarray(img)
 
 
-def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
-    """Run Tesseract and return the number of words above the noise floor.
+def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
+    """Run Tesseract once and return accepted word boxes.
 
-    Words are counted only if they have at least ``_MIN_WORD_CONFIDENCE``
-    confidence and at least ``_MIN_WORD_LENGTH`` characters. Returns 0 on
-    any Tesseract error so the caller can treat the frame as non-demo.
+    A word is accepted if its confidence >= ``_MIN_WORD_CONFIDENCE`` and its
+    stripped text length >= ``_MIN_WORD_LENGTH``. Coordinates are in the
+    downscaled frame's pixel space so all layout signals share one
+    coordinate system from a single OCR call.
     """
     if pytesseract is None:
-        return 0
+        return []
 
     downscaled = _downscale_for_ocr(frame, downscale_dim)
     try:
         data = pytesseract.image_to_data(downscaled, output_type=pytesseract.Output.DICT)
     except Exception as exc:
         logger.warning("OCR failed on frame: %s", exc)
-        return 0
+        return []
 
     texts = data.get("text", [])
     confs = data.get("conf", [])
-    count = 0
-    for text, conf in zip(texts, confs, strict=False):
+    n = len(texts)
+    # Geometry fields may be absent in mocked OCR responses; default to zeros
+    # so legacy callers that only populate text+conf still produce word counts.
+    lefts = data.get("left") or [0] * n
+    tops = data.get("top") or [0] * n
+    widths = data.get("width") or [0] * n
+    heights = data.get("height") or [0] * n
+    boxes: list[WordBox] = []
+    for text, conf, x, y, w, h in zip(texts, confs, lefts, tops, widths, heights, strict=False):
         if not text or len(text.strip()) < _MIN_WORD_LENGTH:
             continue
         try:
@@ -83,8 +94,26 @@ def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
             continue
         if conf_val < _MIN_WORD_CONFIDENCE:
             continue
-        count += 1
-    return count
+        boxes.append(
+            WordBox(
+                text=text,
+                conf=conf_val,
+                x=int(x),
+                y=int(y),
+                w=int(w),
+                h=int(h),
+            )
+        )
+    return boxes
+
+
+def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
+    """Thin wrapper: number of accepted OCR word boxes.
+
+    Preserved for call sites and tests that still target the word-count
+    name. All new code should consume :func:`_ocr_word_boxes` directly.
+    """
+    return len(_ocr_word_boxes(frame, downscale_dim))
 
 
 def _build_search_window(

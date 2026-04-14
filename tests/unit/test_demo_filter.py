@@ -1030,3 +1030,67 @@ class TestPickBestContentIndex:
         with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=5):
             idx = _pick_best_content_index(samples, downscale_dim=1920)
         assert idx == 0
+
+
+class TestOcrWordBoxes:
+    def test_returns_empty_when_pytesseract_missing(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "pytesseract", None)
+        result = demo_filter._ocr_word_boxes(
+            np.zeros((10, 10, 3), dtype=np.uint8), downscale_dim=100
+        )
+        assert result == []
+
+    def test_filters_low_confidence_and_short_words(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        fake_data = {
+            "text": ["hello", "x", "world", "noise"],
+            "conf": ["90", "80", "85", "10"],
+            "left": [10, 50, 100, 200],
+            "top": [5, 5, 5, 5],
+            "width": [40, 5, 45, 30],
+            "height": [12, 12, 12, 12],
+        }
+
+        class FakeTess:
+            class Output:
+                DICT = "dict"
+
+            @staticmethod
+            def image_to_data(img, output_type):
+                return fake_data
+
+        monkeypatch.setattr(demo_filter, "pytesseract", FakeTess)
+        boxes = demo_filter._ocr_word_boxes(
+            np.zeros((100, 300, 3), dtype=np.uint8), downscale_dim=1000
+        )
+        texts = [b.text for b in boxes]
+        assert texts == ["hello", "world"]
+        assert boxes[0].x == 10 and boxes[0].y == 5
+        assert boxes[0].w == 40 and boxes[0].h == 12
+
+    def test_count_words_still_reflects_box_count(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        fake_data = {
+            "text": ["aa", "bb", "cc"],
+            "conf": ["90", "90", "90"],
+            "left": [0, 10, 20],
+            "top": [0, 0, 0],
+            "width": [5, 5, 5],
+            "height": [10, 10, 10],
+        }
+
+        class FakeTess:
+            class Output:
+                DICT = "dict"
+
+            @staticmethod
+            def image_to_data(img, output_type):
+                return fake_data
+
+        monkeypatch.setattr(demo_filter, "pytesseract", FakeTess)
+        frame = np.zeros((100, 300, 3), dtype=np.uint8)
+        assert demo_filter._count_words_in_frame(frame, downscale_dim=1000) == 3
