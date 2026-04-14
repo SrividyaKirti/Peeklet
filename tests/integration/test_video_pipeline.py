@@ -195,7 +195,7 @@ class TestVideoContextExport:
 
         # Markdown references screenshots
         md = (output_dir / "context.md").read_text()
-        assert "# Video Summary: demo.mp4" in md
+        assert "# Meeting Context: demo.mp4" in md
 
     def test_video_without_transcript_still_produces_context(self, tmp_path: Path) -> None:
         """Video without transcript still produces context.json + context.md."""
