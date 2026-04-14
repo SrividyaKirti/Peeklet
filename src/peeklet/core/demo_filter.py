@@ -351,13 +351,17 @@ def apply_demo_filter(
     transcript: list[TranscriptSegment],
     config: DemoFilterConfig,
     output_dir: Path,
+    transcript_text: str = "",
 ) -> list[FrameResult]:
     """Top-level demo-mode entry point.
 
     Builds the LLM client, asks it to pick screenshot-worthy moments from the
-    transcript, then runs Stage B (forward-search + stability + gallery check)
-    to pick the actual frames. Returns the curated keyframe list.
+    transcript, parses Fathom ACTION ITEM anchors from the raw transcript text,
+    merges anchors with LLM picks, then runs Stage B (forward-search + stability
+    + gallery check) to pick the actual frames.
     """
+    from peeklet.core.audio import parse_fathom_anchors
+
     if pytesseract is None:
         logger.warning(
             "pytesseract is not installed — the gallery check is disabled and "
@@ -368,11 +372,17 @@ def apply_demo_filter(
     meta = decoder.get_metadata()
     client = build_llm_client(provider=config.llm_provider, model=config.llm_model)
 
-    moments = client.pick_moments(transcript, meta.duration)
-    logger.info("LLM picked %d screenshot-worthy moments", len(moments))
+    llm_picks = client.pick_moments(transcript, meta.duration)
+    logger.info("LLM picked %d screenshot-worthy moments", len(llm_picks))
+
+    anchors = parse_fathom_anchors(transcript_text) if transcript_text else []
+    if anchors:
+        logger.info("Parsed %d ACTION ITEM anchors from transcript", len(anchors))
+
+    moments = merge_moments(anchors, llm_picks, proximity_sec=5.0)
 
     if not moments:
-        logger.warning("LLM identified zero screenshot-worthy moments in this transcript.")
+        logger.warning("No screenshot-worthy moments found (LLM + anchors).")
         return []
 
     return select_frames_for_moments(

@@ -391,7 +391,7 @@ def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, c
         )
 
     assert results == []
-    assert any("zero screenshot-worthy moments" in rec.message for rec in caplog.records)
+    assert any("screenshot-worthy moments" in rec.message for rec in caplog.records)
 
 
 # --- Regression tests for the demo-mode gallery-check bugs surfaced
@@ -938,3 +938,62 @@ class TestMergeMoments:
         from peeklet.core.demo_filter import merge_moments
 
         assert merge_moments([], [], proximity_sec=5.0) == []
+
+
+def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import apply_demo_filter
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=600.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), int(ts) % 200, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    transcript = [
+        TranscriptSegment(start=230.0, end=235.0, text="Fix assistant prompt"),
+        TranscriptSegment(start=498.0, end=505.0, text="Other discussion"),
+    ]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+
+    fake_llm_moments = [
+        Moment(
+            timestamp=231.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
+        ),  # within 5s of anchor → dropped
+        Moment(
+            timestamp=500.0,
+            visual_context_goal="far away",
+            textual_anchor="t",
+            downstream_utility="u",
+        ),  # kept
+    ]
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = fake_llm_moments
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+
+    raw_text = (
+        "**ACTION ITEM: Fix assistant prompt - "
+        "++[WATCH](https://fathom.video/calls/1?timestamp=232.0)++**\n"
+    )
+
+    results = apply_demo_filter(
+        decoder=decoder,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+        transcript_text=raw_text,
+    )
+
+    # Should have anchor at 232 + llm pick at 500 = 2 results
+    assert len(results) == 2
+    sources = [r.moment_source for r in results]
+    assert "anchor" in sources
+    assert "llm" in sources

@@ -330,7 +330,9 @@ def process_video(
     # Stage B picks frames, and we write outputs directly.
     if config.demo_filter.enabled:
         demo_transcript: list[TranscriptSegment] = []
+        transcript_text = ""
         if config.video.transcript_path:
+            transcript_text = Path(config.video.transcript_path).read_text(encoding="utf-8")
             demo_transcript = parse_transcript(Path(config.video.transcript_path))
 
         demo_results = apply_demo_filter(
@@ -338,6 +340,7 @@ def process_video(
             transcript=demo_transcript,
             config=config.demo_filter,
             output_dir=output_dir,
+            transcript_text=transcript_text,
         )
 
         ctx = build_context(meta.filename, meta.duration, demo_results, demo_transcript)
