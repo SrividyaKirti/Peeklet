@@ -50,11 +50,17 @@ def test_demo_mode_end_to_end_with_fake_llm(
 
     fake_client = MagicMock()
     fake_client.pick_moments.return_value = [
-        Moment(timestamp=1.5, caption="first thing", reason="speaker says here is the first thing"),
+        Moment(
+            timestamp=1.5,
+            visual_context_goal="first thing",
+            textual_anchor="speaker says here is the first thing",
+            downstream_utility="verify first screen",
+        ),
         Moment(
             timestamp=4.5,
-            caption="second thing",
-            reason="speaker says now look at the second thing",
+            visual_context_goal="second thing",
+            textual_anchor="speaker says now look at the second thing",
+            downstream_utility="verify second screen",
         ),
     ]
     monkeypatch.setattr(
@@ -67,12 +73,17 @@ def test_demo_mode_end_to_end_with_fake_llm(
 
     assert len(results) == 2
     assert all(r.is_keyframe for r in results)
-    captions = [r.llm_caption for r in results]
-    assert "first thing" in captions
-    assert "second thing" in captions
+    goals = [r.visual_context_goal for r in results]
+    assert "first thing" in goals
+    assert "second thing" in goals
 
     # Outputs should be written
     out_dir = Path(cfg.exporter.output_dir)
     assert (out_dir / "manifest.parquet").exists()
     assert (out_dir / "context.json").exists()
     assert (out_dir / "context.md").exists()
+
+    # Verify new context.md format
+    md = (out_dir / "context.md").read_text()
+    assert "Meeting Context:" in md
+    assert "Visual Table of Contents" in md

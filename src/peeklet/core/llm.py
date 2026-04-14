@@ -23,18 +23,53 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = (
-    "You are reviewing a transcript from a software demo video. Your job is "
-    "to identify the moments where a screenshot would help a reader understand "
-    "what's happening — places where the speaker references something visual "
-    "on screen, demonstrates an action, opens a UI, or moves on to a new topic "
-    "with a different visual context.\n\n"
-    "For each such moment, return:\n"
-    "- timestamp: a float, seconds into the video\n"
-    "- caption: a one-sentence description of what the screenshot should show\n"
-    "- reason: a one-sentence justification quoting or paraphrasing the speaker's words\n\n"
-    "Return ONLY a JSON array. Example:\n"
-    '[{"timestamp": 12.5, "caption": "...", "reason": "..."}, ...]\n\n'
-    "Pick as many or as few moments as the video needs. There is no minimum or maximum."
+    "You are a Video Content Analyst specializing in visual-textual "
+    "alignment for multimodal AI processing.\n\n"
+    "## Task\n\n"
+    "Analyze the provided meeting/demo transcript to identify specific "
+    "timestamps where a screenshot is essential for a downstream "
+    "Multimodal LLM (MLLM) to understand the technical context being "
+    "discussed.\n\n"
+    "## Selection Criteria\n\n"
+    "Identify a Key Moment whenever the speaker:\n"
+    "1. **Navigates to a new screen or dashboard** — e.g., "
+    '"Now, looking at the settings page..."\n'
+    "2. **References a specific UI element** — e.g., "
+    '"Note the red warning icon in the top right..."\n'
+    "3. **Completes a workflow step** — e.g., "
+    '"Once I click Deploy, you\'ll see the status change..."\n'
+    "4. **Points to data, tables, or graphs** — e.g., "
+    '"This spike in the chart represents..."\n'
+    '5. **Uses deictic expressions** ("this", "that", "here", '
+    '"there") referring to something visible on screen\n\n'
+    "## Timing Rules\n\n"
+    "- Place the timestamp **0.5-1.0 seconds after** the speaker begins "
+    "the triggering sentence, to allow the UI to finish loading or "
+    "animating.\n"
+    "- **Avoid selecting timestamps within 15 seconds of each other** "
+    "unless a major UI transition (new page, modal, or tab) occurs "
+    "between them.\n"
+    "- If the demo stays on one complex screen for an extended period, "
+    "one screenshot is usually enough. Only add a second if the speaker "
+    "references a different region or scrolls to new content.\n\n"
+    "## Action Item Anchors\n\n"
+    "Lines marked `ACTION ITEM` with `WATCH` links are high-priority "
+    "moments flagged by the meeting tool. You MUST include a moment at "
+    "or near each such timestamp. These represent confirmed points of "
+    "interest that a human reviewer has validated.\n\n"
+    "## Output Format\n\n"
+    "Return ONLY a JSON array of objects. No preamble, no explanation.\n\n"
+    '[{"timestamp": 12.5, "visual_context_goal": "...", '
+    '"textual_anchor": "...", "downstream_utility": "..."}]\n\n'
+    "Fields:\n"
+    "- **timestamp**: float, seconds into the video\n"
+    "- **visual_context_goal**: what the screenshot needs to capture "
+    '(e.g., "The configuration modal for API keys")\n'
+    "- **textual_anchor**: the exact transcript line that triggers this "
+    "need — quote the speaker\n"
+    "- **downstream_utility**: why the MLLM needs this image "
+    '(e.g., "To extract parameter values not mentioned in audio")\n\n'
+    "Pick as many or as few moments as the content needs."
 )
 
 
@@ -55,9 +90,15 @@ class LLMClient(Protocol):
 def format_transcript_for_llm(segments: list[TranscriptSegment]) -> str:
     """Render the transcript as one line per segment with timestamps.
 
-    Format: ``[start - end] text``.
+    Format: ``[start - end] **Speaker**: text`` (speaker omitted when None).
     """
-    lines = [f"[{s.start:.1f} - {s.end:.1f}] {s.text}" for s in segments]
+    lines: list[str] = []
+    for s in segments:
+        prefix = f"[{s.start:.1f} - {s.end:.1f}]"
+        if s.speaker:
+            lines.append(f"{prefix} **{s.speaker}**: {s.text}")
+        else:
+            lines.append(f"{prefix} {s.text}")
     return "\n".join(lines)
 
 
@@ -125,7 +166,7 @@ def _parse_moments_json(raw: str, video_duration: float) -> list[Moment]:
             raise LLMResponseError(
                 f"LLM array entry is not an object: {entry!r}\nRaw output:\n{raw}"
             )
-        for key in ("timestamp", "caption", "reason"):
+        for key in ("timestamp", "visual_context_goal", "textual_anchor", "downstream_utility"):
             if key not in entry:
                 raise LLMResponseError(
                     f"LLM moment is missing required key '{key}': {entry!r}\nRaw output:\n{raw}"
@@ -146,8 +187,9 @@ def _parse_moments_json(raw: str, video_duration: float) -> list[Moment]:
         moments.append(
             Moment(
                 timestamp=ts,
-                caption=str(entry["caption"]),
-                reason=str(entry["reason"]),
+                visual_context_goal=str(entry["visual_context_goal"]),
+                textual_anchor=str(entry["textual_anchor"]),
+                downstream_utility=str(entry["downstream_utility"]),
             )
         )
 

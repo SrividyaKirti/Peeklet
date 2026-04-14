@@ -36,11 +36,13 @@ class Region:
 
 @dataclass(frozen=True, slots=True)
 class Moment:
-    """An LLM-picked screenshot-worthy moment in a video transcript."""
+    """A screenshot-worthy moment in a video transcript."""
 
     timestamp: float  # seconds into the video
-    caption: str  # one-sentence description of what the screenshot should show
-    reason: str  # one-sentence justification quoting the speaker's words
+    visual_context_goal: str  # what the screenshot needs to capture
+    textual_anchor: str  # the transcript line that triggers this need
+    downstream_utility: str  # why the MLLM needs this image
+    source: str = "llm"  # "llm" | "anchor"
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,5 +92,7 @@ class FrameResult:
     video_duration: float | None = None
     change_magnitude: str | None = None
     # Demo-mode fields populated by the transcript-driven demo filter.
-    llm_caption: str | None = None
-    llm_reason: str | None = None
+    visual_context_goal: str | None = None
+    textual_anchor: str | None = None
+    downstream_utility: str | None = None
+    moment_source: str | None = None  # "llm" | "anchor"

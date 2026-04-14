@@ -146,22 +146,62 @@ class TestFrameResultVideoFields:
 
 def test_moment_basic():
     seg = Moment(
-        timestamp=12.5, caption="Settings page open", reason="speaker says 'show settings'"
+        timestamp=12.5,
+        visual_context_goal="Settings page open",
+        textual_anchor="speaker says 'show settings'",
+        downstream_utility="Capture the settings panel",
     )
     assert seg.timestamp == 12.5
-    assert seg.caption == "Settings page open"
-    assert seg.reason == "speaker says 'show settings'"
+    assert seg.visual_context_goal == "Settings page open"
+    assert seg.textual_anchor == "speaker says 'show settings'"
+    assert seg.downstream_utility == "Capture the settings panel"
 
 
 def test_moment_is_frozen():
     import pytest
 
-    seg = Moment(timestamp=0.0, caption="x", reason="y")
+    seg = Moment(
+        timestamp=0.0,
+        visual_context_goal="x",
+        textual_anchor="y",
+        downstream_utility="z",
+    )
     with pytest.raises((AttributeError, TypeError)):
         seg.timestamp = 1.0  # type: ignore[misc]
 
 
-def test_frame_result_llm_fields_default_none():
+def test_moment_new_fields():
+    from peeklet.utils.types import Moment
+
+    m = Moment(
+        timestamp=12.5,
+        visual_context_goal="Dashboard with cost breakdown",
+        textual_anchor="Let me show you the estimated cost",
+        downstream_utility="To extract specific cost values",
+    )
+    assert m.timestamp == 12.5
+    assert m.visual_context_goal == "Dashboard with cost breakdown"
+    assert m.textual_anchor == "Let me show you the estimated cost"
+    assert m.downstream_utility == "To extract specific cost values"
+    assert m.source == "llm"  # default
+
+
+def test_moment_anchor_source():
+    from peeklet.utils.types import Moment
+
+    m = Moment(
+        timestamp=232.0,
+        visual_context_goal="Analytics interaction breakdown",
+        textual_anchor="ACTION ITEM: Fix missing assistant prompt",
+        downstream_utility="Action item flagged by meeting tool",
+        source="anchor",
+    )
+    assert m.source == "anchor"
+
+
+def test_frame_result_demo_fields_default_none():
+    from peeklet.utils.types import EventType, FrameResult
+
     r = FrameResult(
         frame_id="f",
         event_type=EventType.SKIPPED,
@@ -170,5 +210,7 @@ def test_frame_result_llm_fields_default_none():
         frame_width=10,
         frame_height=10,
     )
-    assert r.llm_caption is None
-    assert r.llm_reason is None
+    assert r.visual_context_goal is None
+    assert r.textual_anchor is None
+    assert r.downstream_utility is None
+    assert r.moment_source is None

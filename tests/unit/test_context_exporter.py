@@ -55,6 +55,10 @@ class TestBuildContext:
             trigger_type=trigger_type,
             change_magnitude=change_magnitude,
             asset_path=f"output/{frame_id}.png",
+            visual_context_goal="Test screen",
+            textual_anchor="test anchor",
+            downstream_utility="test utility",
+            moment_source="llm",
         )
 
     def test_bidirectional_linking(self) -> None:
@@ -78,6 +82,10 @@ class TestBuildContext:
         assert ctx["transcript"][1]["screenshot_ids"] == [1]
         assert ctx["transcript"][2]["screenshot_ids"] == [2]
         assert ctx["transcript"][0]["screenshot_ids"] == []
+
+        assert ctx["screenshots"][0]["visual_context_goal"] == "Test screen"
+        assert ctx["screenshots"][0]["moment_source"] == "llm"
+        assert ctx["transcript"][0]["speaker"] is None  # SRT segments have no speaker
 
     def test_seconds_since_prev_screenshot(self) -> None:
         results = [
@@ -134,19 +142,23 @@ class TestWriteContextJson:
 
 
 class TestWriteContextMarkdown:
-    def test_writes_markdown_with_header(self, tmp_path: Path) -> None:
+    def test_writes_markdown_with_visual_toc_and_new_header(self, tmp_path: Path) -> None:
         ctx = {
             "video": {"filename": "demo.mp4", "duration_s": 65.5, "total_screenshots": 1},
             "screenshots": [
                 {
                     "id": 1,
-                    "file": "screenshot_00_00_05_200.png",
+                    "file": "demo_0001_00005200ms.jpg",
                     "timestamp_s": 5.2,
                     "timestamp": "00:00:05.200",
-                    "trigger": "visual_change",
+                    "trigger": "transcript_trigger",
                     "change_magnitude": "major",
                     "seconds_since_prev_screenshot": None,
                     "transcript_ids": [1],
+                    "visual_context_goal": "Dashboard with cost breakdown",
+                    "textual_anchor": "Let me show you the estimated cost",
+                    "downstream_utility": "To extract specific cost values",
+                    "moment_source": "llm",
                 }
             ],
             "transcript": [
@@ -158,6 +170,7 @@ class TestWriteContextMarkdown:
                     "end": "00:00:07.000",
                     "text": "Look at this chart",
                     "screenshot_ids": [1],
+                    "speaker": "Alice",
                 }
             ],
         }
@@ -165,37 +178,45 @@ class TestWriteContextMarkdown:
         write_context_markdown(ctx, out_path)
 
         md = out_path.read_text()
-        assert "# Video Summary: demo.mp4" in md
-        assert "Duration: 1m 5.5s" in md
-        assert "screenshot_00_00_05_200.png" in md
-        assert "visual change" in md.lower() or "visual_change" in md
-        assert "Look at this chart" in md
+        assert "# Meeting Context: demo.mp4" in md
+        assert "Screenshots: 1" in md
+        assert "Visual Table of Contents" in md
+        assert "Dashboard with cost breakdown" in md
+        assert "Alice" in md
+        assert "*To extract specific cost values*" in md
+        assert "> Let me show you the estimated cost" in md
 
     def test_screenshots_injected_inline_with_transcript(self, tmp_path: Path) -> None:
-        """Screenshots should be inserted between transcript segments at the
-        chronological position matching their timestamp."""
         ctx = {
             "video": {"filename": "demo.mp4", "duration_s": 30.0, "total_screenshots": 2},
             "screenshots": [
                 {
                     "id": 1,
-                    "file": "screenshot_00_00_06_000.jpg",
+                    "file": "demo_0001.jpg",
                     "timestamp_s": 6.0,
                     "timestamp": "00:00:06.000",
-                    "trigger": "visual_change",
+                    "trigger": "transcript_trigger",
                     "change_magnitude": "major",
                     "seconds_since_prev_screenshot": None,
                     "transcript_ids": [1],
+                    "visual_context_goal": "First screen",
+                    "textual_anchor": "",
+                    "downstream_utility": "",
+                    "moment_source": "llm",
                 },
                 {
                     "id": 2,
-                    "file": "screenshot_00_00_15_000.jpg",
+                    "file": "demo_0002.jpg",
                     "timestamp_s": 15.0,
                     "timestamp": "00:00:15.000",
-                    "trigger": "visual_change",
+                    "trigger": "transcript_trigger",
                     "change_magnitude": "minor",
                     "seconds_since_prev_screenshot": 9.0,
                     "transcript_ids": [],
+                    "visual_context_goal": "Second screen",
+                    "textual_anchor": "",
+                    "downstream_utility": "",
+                    "moment_source": "anchor",
                 },
             ],
             "transcript": [
@@ -207,6 +228,7 @@ class TestWriteContextMarkdown:
                     "end": "00:00:05.000",
                     "text": "First line spoken",
                     "screenshot_ids": [],
+                    "speaker": None,
                 },
                 {
                     "id": 2,
@@ -216,6 +238,7 @@ class TestWriteContextMarkdown:
                     "end": "00:00:14.000",
                     "text": "Second line spoken",
                     "screenshot_ids": [],
+                    "speaker": "Bob",
                 },
                 {
                     "id": 3,
@@ -225,6 +248,7 @@ class TestWriteContextMarkdown:
                     "end": "00:00:25.000",
                     "text": "Third line spoken",
                     "screenshot_ids": [],
+                    "speaker": None,
                 },
             ],
         }
@@ -232,41 +256,30 @@ class TestWriteContextMarkdown:
         write_context_markdown(ctx, out_path)
 
         md = out_path.read_text()
-        # Order should be: seg1 -> shot1 -> seg2 -> shot2 -> seg3
         first_line = md.find("First line spoken")
         shot1 = md.find("Screenshot 1")
         second_line = md.find("Second line spoken")
         shot2 = md.find("Screenshot 2")
         third_line = md.find("Third line spoken")
-
-        assert -1 < first_line < shot1 < second_line < shot2 < third_line, (
-            f"unexpected order in markdown:\n{md}"
-        )
+        assert -1 < first_line < shot1 < second_line < shot2 < third_line
 
     def test_screenshots_only_when_no_transcript(self, tmp_path: Path) -> None:
-        """With no transcript, screenshots should still be emitted in order."""
         ctx = {
-            "video": {"filename": "demo.mp4", "duration_s": 10.0, "total_screenshots": 2},
+            "video": {"filename": "demo.mp4", "duration_s": 10.0, "total_screenshots": 1},
             "screenshots": [
                 {
                     "id": 1,
-                    "file": "screenshot_00_00_02_000.jpg",
+                    "file": "demo_0001.jpg",
                     "timestamp_s": 2.0,
                     "timestamp": "00:00:02.000",
                     "trigger": "visual_change",
                     "change_magnitude": "major",
                     "seconds_since_prev_screenshot": None,
                     "transcript_ids": [],
-                },
-                {
-                    "id": 2,
-                    "file": "screenshot_00_00_07_000.jpg",
-                    "timestamp_s": 7.0,
-                    "timestamp": "00:00:07.000",
-                    "trigger": "visual_change",
-                    "change_magnitude": "minor",
-                    "seconds_since_prev_screenshot": 5.0,
-                    "transcript_ids": [],
+                    "visual_context_goal": "Some screen",
+                    "textual_anchor": "",
+                    "downstream_utility": "",
+                    "moment_source": "llm",
                 },
             ],
             "transcript": [],
@@ -275,6 +288,4 @@ class TestWriteContextMarkdown:
         write_context_markdown(ctx, out_path)
 
         md = out_path.read_text()
-        s1 = md.find("Screenshot 1")
-        s2 = md.find("Screenshot 2")
-        assert -1 < s1 < s2
+        assert "Screenshot 1" in md

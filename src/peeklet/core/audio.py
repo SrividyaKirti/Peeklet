@@ -14,6 +14,7 @@ class TranscriptSegment:
     start: float  # seconds
     end: float  # seconds
     text: str
+    speaker: str | None = None
 
 
 def parse_transcript(path: Path) -> list[TranscriptSegment]:
@@ -81,8 +82,51 @@ def _parse_srt(text: str) -> list[TranscriptSegment]:
 # so embedded ``[WATCH](...?timestamp=...)`` markers inside speech text don't
 # falsely split segments.
 _FATHOM_TS_LINE_RE = re.compile(
-    r"^\s*\+\+\[@\d+:\d+\]\([^)]*\?timestamp=(\d+(?:\.\d+)?)\)\+\+\s*-\s*\*\*[^*]+\*\*\s*$"
+    r"^\s*\+\+\[@\d+:\d+\]\([^)]*\?timestamp=(\d+(?:\.\d+)?)\)\+\+\s*-\s*\*\*([^*]+)\*\*\s*$"
 )
+
+_FATHOM_ACTION_RE = re.compile(
+    r"\*\*ACTION ITEM:\s*(.+?)\s*-\s*"
+    r"\+\+\[WATCH\]\([^?]*\?timestamp=(\d+(?:\.\d+)?)\)\+\+\*\*"
+)
+
+
+def parse_fathom_anchors(text: str) -> list:
+    """Extract ACTION ITEM...WATCH markers as privileged anchor Moments.
+
+    Fathom inlines these as::
+
+        **ACTION ITEM: <desc> - ++[WATCH](https://fathom.video/...?timestamp=<s>)++**
+
+    Each marker often appears twice on consecutive lines; this function
+    deduplicates by (timestamp, description) before returning.
+
+    Returns Moments sorted by timestamp with ``source="anchor"``.
+    """
+    from peeklet.utils.types import Moment
+
+    seen: set[tuple[float, str]] = set()
+    anchors: list[Moment] = []
+
+    for match in _FATHOM_ACTION_RE.finditer(text):
+        description = match.group(1).strip()
+        timestamp = float(match.group(2))
+        key = (timestamp, description)
+        if key in seen:
+            continue
+        seen.add(key)
+        anchors.append(
+            Moment(
+                timestamp=timestamp,
+                visual_context_goal=description,
+                textual_anchor=match.group(0),
+                downstream_utility="Action item flagged by meeting tool — guaranteed capture",
+                source="anchor",
+            )
+        )
+
+    anchors.sort(key=lambda m: m.timestamp)
+    return anchors
 
 
 def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
@@ -98,8 +142,9 @@ def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
     precise than the visible ``MM:SS``). The end time of each segment is
     inferred from the start of the next segment.
     """
-    raw_segments: list[tuple[float, list[str]]] = []
+    raw_segments: list[tuple[float, str | None, list[str]]] = []
     current_start: float | None = None
+    current_speaker: str | None = None
     current_lines: list[str] = []
 
     for line in text.splitlines():
@@ -111,8 +156,9 @@ def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
                 continue
             # Flush previous segment
             if current_start is not None and current_lines:
-                raw_segments.append((current_start, current_lines))
+                raw_segments.append((current_start, current_speaker, current_lines))
             current_start = ts
+            current_speaker = match.group(2).strip()
             current_lines = []
             continue
         if current_start is None:
@@ -122,14 +168,14 @@ def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
             current_lines.append(stripped)
 
     if current_start is not None and current_lines:
-        raw_segments.append((current_start, current_lines))
+        raw_segments.append((current_start, current_speaker, current_lines))
 
     segments: list[TranscriptSegment] = []
-    for i, (start, lines) in enumerate(raw_segments):
+    for i, (start, speaker, lines) in enumerate(raw_segments):
         end = raw_segments[i + 1][0] if i + 1 < len(raw_segments) else start + 5.0
         content = " ".join(lines).strip()
         if content:
-            segments.append(TranscriptSegment(start=start, end=end, text=content))
+            segments.append(TranscriptSegment(start=start, end=end, text=content, speaker=speaker))
     return segments
 
 
