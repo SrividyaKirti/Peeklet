@@ -242,11 +242,6 @@ def _is_stable(
     return compare_frames(frame, nxt).ssim_score > threshold
 
 
-def _is_gallery_frame(frame: np.ndarray, downscale_dim: int, min_words: int) -> bool:
-    """Return True if the frame has too few visible words to be demo content."""
-    return _count_words_in_frame(frame, downscale_dim) < min_words
-
-
 def _find_segment_for_timestamp(
     ts: float, transcript: list[TranscriptSegment]
 ) -> TranscriptSegment | None:
@@ -426,14 +421,10 @@ def select_frames_for_moments(
         picked_idx = _pick_best_content_index(samples, config.gallery_ocr_min_dim)
         picked_frame, picked_ts, picked_frame_num = samples[picked_idx]
 
-        if _is_gallery_frame(
-            picked_frame,
-            downscale_dim=config.gallery_ocr_min_dim,
-            min_words=config.gallery_min_words,
-        ):
+        if _is_low_info_frame(picked_frame, config):
             logger.warning(
-                "LLM picked moment at %.2fs ('%s') but the frame is gallery-view "
-                "or blank — no demo content visible. Skipping.",
+                "Moment at %.2fs ('%s') picked a low-information frame "
+                "(gallery view or blank) — skipping.",
                 moment.timestamp,
                 moment.visual_context_goal,
             )

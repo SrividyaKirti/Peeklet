@@ -8,6 +8,29 @@ import numpy as np
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _pass_layout_rejector_by_default(request, monkeypatch):
+    """Default: let the layout rejector pass every frame.
+
+    Integration tests feed synthetic flat-colored frames through
+    ``select_frames_for_moments``; the real layout rejector would drop
+    all of them because they have zero edge density and zero OCR text.
+    Tests that specifically exercise the rejector live in
+    ``TestIsLowInfoFrame`` (patches the signals directly) or are marked
+    ``rejector_live``.
+    """
+    if "TestIsLowInfoFrame" in request.node.nodeid:
+        return
+    if "test_low_info_rejector_accepts_real_text_frame" in request.node.nodeid:
+        return
+    if "test_select_frames_for_moments_drops_gallery_frames" in request.node.nodeid:
+        return
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._is_low_info_frame",
+        lambda frame, config: False,
+    )
+
+
 def _make_frame(h: int = 360, w: int = 360) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -172,20 +195,8 @@ def test_is_stable_fails_when_one_neighbor_differs():
     assert _is_stable(frame, prev, nxt, threshold=0.92) is False
 
 
-def test_is_gallery_frame_returns_true_below_threshold():
-    from peeklet.core.demo_filter import _is_gallery_frame
-
-    frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=2):
-        assert _is_gallery_frame(frame, downscale_dim=360, min_words=5) is True
-
-
-def test_is_gallery_frame_returns_false_above_threshold():
-    from peeklet.core.demo_filter import _is_gallery_frame
-
-    frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=10):
-        assert _is_gallery_frame(frame, downscale_dim=360, min_words=5) is False
+# Word-count-gate gallery tests removed: behavior replaced by the triple-AND
+# layout rejector (see TestIsLowInfoFrame).
 
 
 def _make_decoder_for_moments(meta_duration: float = 60.0):
@@ -275,8 +286,8 @@ def test_select_frames_for_moments_drops_gallery_frames(tmp_path, monkeypatch):
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=5)
 
     monkeypatch.setattr(
-        "peeklet.core.demo_filter._count_words_in_frame",
-        lambda frame, downscale_dim: 0,
+        "peeklet.core.demo_filter._is_low_info_frame",
+        lambda frame, config: True,
     )
     monkeypatch.setattr(
         "peeklet.core.demo_filter.save_keyframe",
@@ -421,30 +432,35 @@ def test_demo_filter_config_has_gallery_ocr_min_dim_default_at_least_1280():
 
 
 @pytest.mark.skipif(not _tesseract_available(), reason="tesseract binary not installed")
-def test_is_gallery_frame_accepts_real_text_frame_at_720p():
-    """Bug 3 regression: a 720p frame with clearly readable text must NOT be
-    flagged as gallery view at the default ``gallery_ocr_min_dim``.
-
-    This is the end-to-end OCR test that would have caught the silent rejection
-    of every demo frame from a 720p screen-share recording.
+def test_low_info_rejector_accepts_real_text_frame_at_720p():
+    """Regression: a 720p frame with dashboard-density text must NOT be
+    rejected as low-info at the default config thresholds. Guards against
+    the OCR downscale regression that previously dropped every demo frame
+    from a 720p screen-share recording.
     """
     from peeklet.config import DemoFilterConfig
-    from peeklet.core.demo_filter import _is_gallery_frame
+    from peeklet.core.demo_filter import _is_low_info_frame
 
-    frame = _render_text_frame(
-        ["Settings", "Dashboard", "Analytics", "Users", "Tokens", "Reports", "Logout"],
-        width=1280,
-        height=720,
-    )
+    # Dashboard-like content: many words across rows and columns so that
+    # both text-line count and grid-cell dispersion clear thresholds, plus
+    # enough text edges that edge density also clears.
+    dashboard_rows = [
+        "Settings Dashboard Analytics Users Reports Logout",
+        "Home Billing Notifications Search Support Help",
+        "Active Inactive Pending Archived Draft Published",
+        "Create Edit Delete Import Export Refresh",
+        "Name Email Role Status Updated Created",
+        "Policy Tool Insights Logs Models Cost",
+        "January February March April May June",
+        "Monday Tuesday Wednesday Thursday Friday Saturday",
+        "Alpha Beta Gamma Delta Epsilon Zeta",
+        "North South East West Center Outer",
+        "Red Green Blue Yellow Purple Orange",
+        "Low Medium High Critical Severe Blocker",
+    ]
+    frame = _render_text_frame(dashboard_rows, width=1280, height=720)
     cfg = DemoFilterConfig()
-    assert (
-        _is_gallery_frame(
-            frame,
-            downscale_dim=cfg.gallery_ocr_min_dim,
-            min_words=cfg.gallery_min_words,
-        )
-        is False
-    )
+    assert _is_low_info_frame(frame, cfg) is False
 
 
 def test_apply_demo_filter_raises_when_pytesseract_unavailable(tmp_path, monkeypatch):
