@@ -121,15 +121,7 @@ def _is_stable(
 
 
 def _is_gallery_frame(frame: np.ndarray, downscale_dim: int, min_words: int) -> bool:
-    """Return True if the frame has too few visible words to be demo content.
-
-    When OCR is unavailable we cannot tell whether the frame is gallery view,
-    so we return False (let the LLM-picked frame through). Returning True here
-    would silently reject every frame and produce a zero-keyframe run with no
-    indication that OCR was the cause.
-    """
-    if pytesseract is None:
-        return False
+    """Return True if the frame has too few visible words to be demo content."""
     return _count_words_in_frame(frame, downscale_dim) < min_words
 
 
@@ -188,6 +180,31 @@ def _pick_stable_index(
         if _is_stable(frame, prev_frame, next_frame, threshold):
             return i
     return 0
+
+
+def _pick_best_content_index(
+    samples: list[tuple[np.ndarray, float, int]],
+    downscale_dim: int,
+) -> int:
+    """Return the index of the frame with the most OCR-readable text.
+
+    Scores each sampled frame by OCR word count and returns the index
+    with the highest count. Ties are broken by picking the latest frame
+    (higher index — more likely to be fully loaded). Returns 0 when all
+    frames score zero or the sample list has a single entry.
+    """
+    if len(samples) <= 1:
+        return 0
+
+    best_idx = 0
+    best_count = -1
+    for i, (frame, _ts, _fnum) in enumerate(samples):
+        count = _count_words_in_frame(frame, downscale_dim)
+        if count > best_count or (count == best_count and count > 0):
+            best_count = count
+            best_idx = i
+
+    return best_idx
 
 
 def merge_moments(
@@ -284,7 +301,7 @@ def select_frames_for_moments(
             )
             continue
 
-        picked_idx = _pick_stable_index(samples, config.ssim_stability_threshold)
+        picked_idx = _pick_best_content_index(samples, config.gallery_ocr_min_dim)
         picked_frame, picked_ts, picked_frame_num = samples[picked_idx]
 
         if _is_gallery_frame(
@@ -363,10 +380,9 @@ def apply_demo_filter(
     from peeklet.core.audio import parse_fathom_anchors
 
     if pytesseract is None:
-        logger.warning(
-            "pytesseract is not installed — the gallery check is disabled and "
-            "every LLM-picked frame will be saved without OCR filtering. "
-            "Install with: pip install peeklet[demo]"
+        raise RuntimeError(
+            "Demo mode requires pytesseract for OCR-based frame scoring and "
+            "gallery detection. Install with: pip install peeklet[demo]"
         )
 
     meta = decoder.get_metadata()
