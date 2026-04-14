@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -348,6 +347,10 @@ def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
         "peeklet.core.demo_filter.save_keyframe",
         lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
     )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._count_words_in_frame", lambda frame, downscale_dim: 0
+    )
     decoder.extract_frame_at.side_effect = lambda ts: (
         np.full((100, 100, 3), 200, dtype=np.uint8),
         float(ts),
@@ -380,6 +383,7 @@ def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, c
         "peeklet.core.demo_filter.build_llm_client",
         lambda provider, model: fake_client,
     )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
 
     cfg = DemoFilterConfig(enabled=True)
     with caplog.at_level(logging.WARNING):
@@ -416,21 +420,6 @@ def test_demo_filter_config_has_gallery_ocr_min_dim_default_at_least_1280():
     assert cfg.gallery_ocr_min_dim >= 1280
 
 
-def test_is_gallery_frame_returns_false_when_pytesseract_unavailable():
-    """Bug 2 regression: missing OCR must not silently reject every frame.
-
-    When pytesseract is unavailable we cannot determine whether a frame is
-    gallery view, so the safe default is to let the frame through and let the
-    LLM-picked moment win. The previous behavior returned True (== gallery)
-    for every frame because ``_count_words_in_frame`` returned 0 < min_words.
-    """
-    from peeklet.core.demo_filter import _is_gallery_frame
-
-    frame = _make_frame(h=720, w=1280)
-    with patch("peeklet.core.demo_filter.pytesseract", None):
-        assert _is_gallery_frame(frame, downscale_dim=1920, min_words=5) is False
-
-
 @pytest.mark.skipif(not _tesseract_available(), reason="tesseract binary not installed")
 def test_is_gallery_frame_accepts_real_text_frame_at_720p():
     """Bug 3 regression: a 720p frame with clearly readable text must NOT be
@@ -458,34 +447,22 @@ def test_is_gallery_frame_accepts_real_text_frame_at_720p():
     )
 
 
-def test_apply_demo_filter_warns_when_pytesseract_unavailable(tmp_path, monkeypatch, caplog):
-    """Bug 2 regression: a missing OCR backend must produce a startup warning,
-    not a silent zero-keyframes run.
-    """
+def test_apply_demo_filter_raises_when_pytesseract_unavailable(tmp_path, monkeypatch):
+    """Missing OCR backend must raise, not silently degrade."""
     from peeklet.config import DemoFilterConfig
     from peeklet.core.demo_filter import apply_demo_filter
 
     decoder = _make_decoder_for_moments(meta_duration=60.0)
-    fake_client = MagicMock()
-    fake_client.pick_moments.return_value = []
-    monkeypatch.setattr(
-        "peeklet.core.demo_filter.build_llm_client",
-        lambda provider, model: fake_client,
-    )
     monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", None)
 
     cfg = DemoFilterConfig(enabled=True)
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(RuntimeError, match="pytesseract"):
         apply_demo_filter(
             decoder=decoder,
             transcript=[],
             config=cfg,
             output_dir=tmp_path,
         )
-
-    assert any(
-        "OCR" in rec.message and "gallery" in rec.message.lower() for rec in caplog.records
-    ), f"expected an OCR-unavailable warning, got: {[r.message for r in caplog.records]}"
 
 
 # --- Dedup + tail-skip (PR A from 2026-04-10 demo-mode quality plan) ---
@@ -978,6 +955,10 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
         "peeklet.core.demo_filter.build_llm_client",
         lambda provider, model: fake_client,
     )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._count_words_in_frame", lambda frame, downscale_dim: 0
+    )
 
     raw_text = (
         "**ACTION ITEM: Fix assistant prompt - "
@@ -997,3 +978,55 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
     sources = [r.moment_source for r in results]
     assert "anchor" in sources
     assert "llm" in sources
+
+
+def test_default_forward_search_window_is_10s():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.forward_search_window_max_sec == 10.0
+
+
+class TestPickBestContentIndex:
+    def test_picks_frame_with_most_words(self):
+        from peeklet.core.demo_filter import _pick_best_content_index
+
+        samples = [
+            (np.zeros((100, 100, 3), dtype=np.uint8), 10.0, 300),
+            (np.zeros((100, 100, 3), dtype=np.uint8), 10.5, 315),
+            (np.zeros((100, 100, 3), dtype=np.uint8), 11.0, 330),
+        ]
+        with patch("peeklet.core.demo_filter._count_words_in_frame", side_effect=[3, 15, 8]):
+            idx = _pick_best_content_index(samples, downscale_dim=1920)
+        assert idx == 1
+
+    def test_tiebreak_picks_latest_frame(self):
+        from peeklet.core.demo_filter import _pick_best_content_index
+
+        samples = [
+            (np.zeros((100, 100, 3), dtype=np.uint8), 10.0, 300),
+            (np.zeros((100, 100, 3), dtype=np.uint8), 10.5, 315),
+            (np.zeros((100, 100, 3), dtype=np.uint8), 11.0, 330),
+        ]
+        with patch("peeklet.core.demo_filter._count_words_in_frame", side_effect=[10, 10, 10]):
+            idx = _pick_best_content_index(samples, downscale_dim=1920)
+        assert idx == 2
+
+    def test_all_zero_returns_index_zero(self):
+        from peeklet.core.demo_filter import _pick_best_content_index
+
+        samples = [
+            (np.zeros((100, 100, 3), dtype=np.uint8), 10.0, 300),
+            (np.zeros((100, 100, 3), dtype=np.uint8), 10.5, 315),
+        ]
+        with patch("peeklet.core.demo_filter._count_words_in_frame", side_effect=[0, 0]):
+            idx = _pick_best_content_index(samples, downscale_dim=1920)
+        assert idx == 0
+
+    def test_single_sample_returns_zero(self):
+        from peeklet.core.demo_filter import _pick_best_content_index
+
+        samples = [(np.zeros((100, 100, 3), dtype=np.uint8), 10.0, 300)]
+        with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=5):
+            idx = _pick_best_content_index(samples, downscale_dim=1920)
+        assert idx == 0
