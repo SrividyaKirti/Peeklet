@@ -5,6 +5,7 @@ from pathlib import Path
 
 from peeklet.core.audio import TranscriptSegment
 from peeklet.core.context_exporter import (
+    _screenshot_block,
     build_context,
     format_timestamp,
     timestamp_filename,
@@ -108,6 +109,22 @@ class TestBuildContext:
         ctx = build_context("demo.mp4", 60.0, results, [])
         assert ctx["screenshots"][0]["transcript_ids"] == []
 
+    def test_ocr_fields_propagate_to_screenshot_entries(self) -> None:
+        r = self._make_keyframe_result("s1", 5.0)
+        r.ocr_text = "Invoice Dashboard Submit"
+        r.ocr_tokens = ["invoice", "dashboard", "submit"]
+        ctx = build_context("demo.mp4", 60.0, [r], [])
+        entry = ctx["screenshots"][0]
+        assert entry["ocr_text"] == "Invoice Dashboard Submit"
+        assert entry["ocr_tokens"] == ["invoice", "dashboard", "submit"]
+
+    def test_ocr_fields_default_to_empty(self) -> None:
+        r = self._make_keyframe_result("s1", 5.0)
+        ctx = build_context("demo.mp4", 60.0, [r], [])
+        entry = ctx["screenshots"][0]
+        assert entry["ocr_text"] == ""
+        assert entry["ocr_tokens"] == []
+
     def test_filters_non_keyframes(self) -> None:
         """build_context should ignore FrameResult entries with is_keyframe=False."""
         keyframe = self._make_keyframe_result("kf", 5.0)
@@ -183,8 +200,11 @@ class TestWriteContextMarkdown:
         assert "Visual Table of Contents" in md
         assert "Dashboard with cost breakdown" in md
         assert "Alice" in md
-        assert "*To extract specific cost values*" in md
-        assert "> Let me show you the estimated cost" in md
+        # Boilerplate downstream_utility line and anchor blockquote are
+        # no longer emitted — they duplicated info already in the header
+        # or transcript.
+        assert "*To extract specific cost values*" not in md
+        assert "> Let me show you the estimated cost" not in md
 
     def test_screenshots_injected_inline_with_transcript(self, tmp_path: Path) -> None:
         ctx = {
@@ -262,6 +282,110 @@ class TestWriteContextMarkdown:
         shot2 = md.find("Screenshot 2")
         third_line = md.find("Third line spoken")
         assert -1 < first_line < shot1 < second_line < shot2 < third_line
+
+    def test_guaranteed_tag_only_on_anchor_source(self, tmp_path: Path) -> None:
+        anchor_shot = {
+            "id": 1,
+            "file": "a.jpg",
+            "timestamp_s": 1.0,
+            "timestamp": "00:00:01.000",
+            "trigger": "transcript_trigger",
+            "change_magnitude": "major",
+            "seconds_since_prev_screenshot": None,
+            "transcript_ids": [],
+            "visual_context_goal": "Click Save",
+            "textual_anchor": (
+                "**ACTION ITEM: Click Save - "
+                "++[WATCH](https://fathom.video/calls/1?timestamp=1.0)++**"
+            ),
+            "downstream_utility": "",
+            "moment_source": "anchor",
+        }
+        llm_shot = {
+            **anchor_shot,
+            "id": 2,
+            "timestamp_s": 5.0,
+            "timestamp": "00:00:05.000",
+            "file": "b.jpg",
+            "moment_source": "llm",
+            "textual_anchor": "",
+        }
+        block_anchor = "\n".join(_screenshot_block(anchor_shot))
+        block_llm = "\n".join(_screenshot_block(llm_shot))
+        assert "[guaranteed]" in block_anchor
+        assert "[guaranteed]" not in block_llm
+
+    def test_screenshot_block_drops_utility_and_anchor_lines(self) -> None:
+        shot = {
+            "id": 1,
+            "file": "a.jpg",
+            "timestamp_s": 1.0,
+            "timestamp": "00:00:01.000",
+            "trigger": "transcript_trigger",
+            "change_magnitude": "major",
+            "seconds_since_prev_screenshot": None,
+            "transcript_ids": [],
+            "visual_context_goal": "Dashboard",
+            "textual_anchor": "some transcript line",
+            "downstream_utility": "boilerplate utility text",
+            "moment_source": "llm",
+        }
+        block = "\n".join(_screenshot_block(shot))
+        assert "boilerplate utility text" not in block
+        assert "> some transcript line" not in block
+        assert "**Screenshot 1" in block
+        assert "![Screenshot](a.jpg)" in block
+
+    def test_references_section_lists_watch_urls(self, tmp_path: Path) -> None:
+        ctx = {
+            "video": {"filename": "demo.mp4", "duration_s": 10.0, "total_screenshots": 2},
+            "screenshots": [
+                {
+                    "id": 1,
+                    "file": "a.jpg",
+                    "timestamp_s": 1.0,
+                    "timestamp": "00:00:01.000",
+                    "trigger": "transcript_trigger",
+                    "change_magnitude": "major",
+                    "seconds_since_prev_screenshot": None,
+                    "transcript_ids": [],
+                    "visual_context_goal": "Click Save",
+                    "textual_anchor": (
+                        "**ACTION ITEM: Click Save - "
+                        "++[WATCH](https://fathom.video/calls/1?timestamp=1.0)++**"
+                    ),
+                    "downstream_utility": "",
+                    "moment_source": "anchor",
+                },
+                {
+                    "id": 2,
+                    "file": "b.jpg",
+                    "timestamp_s": 5.0,
+                    "timestamp": "00:00:05.000",
+                    "trigger": "transcript_trigger",
+                    "change_magnitude": "major",
+                    "seconds_since_prev_screenshot": 4.0,
+                    "transcript_ids": [],
+                    "visual_context_goal": "LLM pick",
+                    "textual_anchor": "a spoken line",
+                    "downstream_utility": "",
+                    "moment_source": "llm",
+                },
+            ],
+            "transcript": [],
+        }
+        out_path = tmp_path / "context.md"
+        write_context_markdown(ctx, out_path)
+        md = out_path.read_text()
+        # Footnote section exists and contains the WATCH URL for the
+        # anchor screenshot only.
+        assert "## References" in md
+        assert "https://fathom.video/calls/1?timestamp=1.0" in md
+        # URL must not be duplicated inline as a blockquote under the
+        # screenshot block.
+        assert md.count("https://fathom.video/calls/1?timestamp=1.0") == 1
+        # References section must come after the timeline.
+        assert md.find("## References") > md.find("## Timeline")
 
     def test_screenshots_only_when_no_transcript(self, tmp_path: Path) -> None:
         ctx = {

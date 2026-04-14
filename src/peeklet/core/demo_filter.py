@@ -192,17 +192,20 @@ def _normalize_tokens(text: str) -> set[str]:
     return tokens - _STOPWORDS
 
 
-def _ocr_tokens(frame: np.ndarray, downscale_dim: int) -> set[str]:
-    """Normalized token set extracted from ``frame`` via OCR.
+def _ocr_text_and_tokens(frame: np.ndarray, downscale_dim: int) -> tuple[str, set[str]]:
+    """Joined OCR text and normalized token set from one OCR pass.
 
-    Runs the same word-box OCR as :func:`_ocr_word_boxes` and normalizes
-    each accepted box's text through :func:`_normalize_tokens`.
+    Runs :func:`_ocr_word_boxes` once and returns both the raw joined
+    word text (useful as a sidecar for downstream MLLM grounding) and
+    the normalized token set used for caption/image alignment. Sharing
+    one OCR call keeps the alignment validation path single-pass even
+    when callers need both representations.
     """
     boxes = _ocr_word_boxes(frame, downscale_dim)
     if not boxes:
-        return set()
+        return "", set()
     joined = " ".join(b.text for b in boxes)
-    return _normalize_tokens(joined)
+    return joined, _normalize_tokens(joined)
 
 
 def _count_text_lines(boxes: list[WordBox]) -> int:
@@ -534,6 +537,9 @@ def _fill_coverage_gaps(
             picked_frame, picked_ts, picked_frame_num, _win = picked
             frame_id = f"demo_gapfill_{int(picked_ts * 1000):08d}ms"
             asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
+            gap_ocr_text, gap_ocr_tokens = _ocr_text_and_tokens(
+                picked_frame, config.gallery_ocr_min_dim
+            )
             filled.append(
                 FrameResult(
                     frame_id=frame_id,
@@ -554,6 +560,8 @@ def _fill_coverage_gaps(
                     downstream_utility=synthetic.downstream_utility,
                     moment_source="gap_fill",
                     alignment_confidence="temporal_only",
+                    ocr_text=gap_ocr_text,
+                    ocr_tokens=sorted(gap_ocr_tokens),
                 )
             )
             inserted = True
@@ -642,8 +650,11 @@ def select_frames_for_moments(
 
         caption_tokens = _normalize_tokens(f"{moment.visual_context_goal} {moment.textual_anchor}")
         alignment_confidence: str = "content"
+        frame_ocr_text, frame_ocr_tokens = _ocr_text_and_tokens(
+            picked_frame, config.gallery_ocr_min_dim
+        )
         if caption_tokens:
-            frame_tokens = _ocr_tokens(picked_frame, config.gallery_ocr_min_dim)
+            frame_tokens = frame_ocr_tokens
             if not (frame_tokens & caption_tokens):
                 # Try widening the search window once before falling back to
                 # temporal_only. Skip the retry if the initial window already
@@ -659,13 +670,16 @@ def select_frames_for_moments(
                     )
                     if retry is not None:
                         retry_frame, retry_ts, retry_fnum, _ = retry
-                        retry_tokens = _ocr_tokens(retry_frame, config.gallery_ocr_min_dim)
+                        retry_text, retry_tokens = _ocr_text_and_tokens(
+                            retry_frame, config.gallery_ocr_min_dim
+                        )
                         if retry_tokens & caption_tokens:
                             picked_frame, picked_ts, picked_frame_num = (
                                 retry_frame,
                                 retry_ts,
                                 retry_fnum,
                             )
+                            frame_ocr_text, frame_ocr_tokens = retry_text, retry_tokens
                             logger.info(
                                 "Moment at %.2fs: widened window recovered a "
                                 "caption-aligned frame at %.2fs.",
@@ -739,6 +753,8 @@ def select_frames_for_moments(
                 moment_source=moment.source,
                 keyframe_index=idx,
                 alignment_confidence=alignment_confidence,  # type: ignore[arg-type]
+                ocr_text=frame_ocr_text,
+                ocr_tokens=sorted(frame_ocr_tokens),
             )
         )
 

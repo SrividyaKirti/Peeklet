@@ -1647,8 +1647,11 @@ class TestCaptionImageAlignment:
         )
         monkeypatch.setattr(
             demo_filter,
-            "_ocr_tokens",
-            lambda frame, downscale_dim: {"invoice", "approval", "dashboard"},
+            "_ocr_text_and_tokens",
+            lambda frame, downscale_dim: (
+                "Invoice Approval Dashboard",
+                {"invoice", "approval", "dashboard"},
+            ),
         )
 
         results = demo_filter.select_frames_for_moments(
@@ -1674,8 +1677,8 @@ class TestCaptionImageAlignment:
         )
         monkeypatch.setattr(
             demo_filter,
-            "_ocr_tokens",
-            lambda frame, downscale_dim: {"unrelated", "toolbar"},
+            "_ocr_text_and_tokens",
+            lambda frame, downscale_dim: ("Unrelated Toolbar", {"unrelated", "toolbar"}),
         )
 
         results = demo_filter.select_frames_for_moments(
@@ -1709,10 +1712,10 @@ class TestCaptionImageAlignment:
             # retry): matches the caption.
             calls["n"] += 1
             if calls["n"] == 1:
-                return {"unrelated"}
-            return {"invoice", "dashboard"}
+                return ("unrelated", {"unrelated"})
+            return ("invoice dashboard", {"invoice", "dashboard"})
 
-        monkeypatch.setattr(demo_filter, "_ocr_tokens", _tokens)
+        monkeypatch.setattr(demo_filter, "_ocr_text_and_tokens", _tokens)
 
         results = demo_filter.select_frames_for_moments(
             decoder=decoder,
@@ -1741,9 +1744,9 @@ class TestCaptionImageAlignment:
 
         def _tokens(frame, downscale_dim):
             calls["n"] += 1
-            return {"unrelated"}
+            return ("unrelated", {"unrelated"})
 
-        monkeypatch.setattr(demo_filter, "_ocr_tokens", _tokens)
+        monkeypatch.setattr(demo_filter, "_ocr_text_and_tokens", _tokens)
 
         # Tiny segment — initial window is clamped to it entirely, so the
         # widened retry would produce the same window and is skipped.
@@ -1770,7 +1773,11 @@ class TestCaptionImageAlignment:
             "save_keyframe",
             lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
         )
-        monkeypatch.setattr(demo_filter, "_ocr_tokens", lambda frame, downscale_dim: set())
+        monkeypatch.setattr(
+            demo_filter,
+            "_ocr_text_and_tokens",
+            lambda frame, downscale_dim: ("", set()),
+        )
 
         moment = Moment(
             timestamp=10.0,
@@ -1802,8 +1809,8 @@ class TestCaptionImageAlignment:
         )
         monkeypatch.setattr(
             demo_filter,
-            "_ocr_tokens",
-            lambda frame, downscale_dim: {"invoice", "dashboard"},
+            "_ocr_text_and_tokens",
+            lambda frame, downscale_dim: ("invoice dashboard", {"invoice", "dashboard"}),
         )
 
         moments = [
@@ -1835,3 +1842,35 @@ class TestCaptionImageAlignment:
         assert gap_fills, "expected at least one gap-fill frame"
         for r in gap_fills:
             assert r.alignment_confidence == "temporal_only"
+
+    def test_frame_results_carry_ocr_text_and_tokens(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+
+        decoder = _make_decoder_for_moments(meta_duration=60.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+        monkeypatch.setattr(
+            demo_filter,
+            "_ocr_text_and_tokens",
+            lambda frame, downscale_dim: (
+                "Invoice Approval Dashboard",
+                {"invoice", "approval", "dashboard"},
+            ),
+        )
+
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=[self._base_moment()],
+            transcript=[TranscriptSegment(start=0.0, end=30.0, text="x")],
+            config=self._make_config(),
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 1
+        assert results[0].ocr_text == "Invoice Approval Dashboard"
+        assert set(results[0].ocr_tokens or []) == {"invoice", "approval", "dashboard"}
+        assert results[0].alignment_confidence == "content"

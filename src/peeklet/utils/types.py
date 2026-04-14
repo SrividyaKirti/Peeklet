@@ -97,3 +97,5 @@ class FrameResult:
     downstream_utility: str | None = None
     moment_source: str | None = None  # "llm" | "anchor"
     alignment_confidence: Literal["content", "temporal_only"] | None = None
+    ocr_text: str | None = None
+    ocr_tokens: list[str] | None = None

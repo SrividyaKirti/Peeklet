@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+_WATCH_URL_RE = re.compile(r"\[WATCH\]\((https?://[^)]+)\)")
 
 if TYPE_CHECKING:
     from peeklet.core.audio import TranscriptSegment
@@ -57,6 +60,8 @@ def build_context(
                 "downstream_utility": r.downstream_utility or "",
                 "moment_source": r.moment_source or "",
                 "alignment_confidence": r.alignment_confidence or "content",
+                "ocr_text": r.ocr_text or "",
+                "ocr_tokens": list(r.ocr_tokens or []),
             }
         )
         prev_ts = ts
@@ -117,21 +122,23 @@ def _format_duration(seconds: float) -> str:
 
 
 def _screenshot_block(s: dict[str, Any]) -> list[str]:
-    """Render a screenshot annotation block as Markdown lines."""
+    """Render a screenshot annotation block as Markdown lines.
+
+    Compacted form: bolded header + image only. The ``[guaranteed]`` tag
+    is appended to the header when the screenshot originated from a
+    Fathom action-item anchor. The blockquoted ``textual_anchor`` and
+    the ``downstream_utility`` caption are intentionally omitted — both
+    duplicated information already present in the transcript or header.
+    """
     goal = s.get("visual_context_goal") or (s.get("trigger") or "visual_change").replace("_", " ")
-    lines = [
-        f"**Screenshot {s['id']} ({s['timestamp']}) — {goal}**",
+    header = f"**Screenshot {s['id']} ({s['timestamp']}) — {goal}**"
+    if s.get("moment_source") == "anchor":
+        header += " [guaranteed]"
+    return [
+        header,
         f"![Screenshot]({s['file']})",
+        "",
     ]
-    utility = s.get("downstream_utility")
-    if utility:
-        lines.append(f"*{utility}*")
-    anchor = s.get("textual_anchor")
-    if anchor:
-        lines.append("")
-        lines.append(f"> {anchor}")
-    lines.append("")
-    return lines
 
 
 def _format_short_timestamp(seconds: float) -> str:
@@ -203,5 +210,20 @@ def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
         else:
             lines.extend(_screenshot_block(screenshots[shot_idx]))
             shot_idx += 1
+
+    references: list[tuple[int, str]] = []
+    for s in screenshots:
+        if s.get("moment_source") != "anchor":
+            continue
+        match = _WATCH_URL_RE.search(s.get("textual_anchor") or "")
+        if match:
+            references.append((s["id"], match.group(1)))
+
+    if references:
+        lines.append("## References")
+        lines.append("")
+        for shot_id, url in references:
+            lines.append(f"- Screenshot {shot_id}: {url}")
+        lines.append("")
 
     path.write_text("\n".join(lines) + "\n")
