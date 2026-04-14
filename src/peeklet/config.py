@@ -98,7 +98,7 @@ class DemoFilterConfig(BaseModel):
     frame_search_resolution: int = Field(default=360, gt=0)
     ssim_stability_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     forward_search_step_sec: float = Field(default=0.5, gt=0.0)
-    forward_search_window_max_sec: float = Field(default=5.0, gt=0.0)
+    forward_search_window_max_sec: float = Field(default=10.0, gt=0.0)
     # Gallery detection (reuses _count_words_in_frame)
     gallery_min_words: int = Field(default=5, ge=0)
     # Minimum longest-edge resolution for OCR. Frames are downscaled only if
