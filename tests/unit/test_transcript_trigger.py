@@ -75,13 +75,40 @@ class TestDetectTriggers:
         triggers = detect_triggers(segments)
         assert len(triggers) == 1
 
-    def test_single_high_no_medium_no_trigger(self) -> None:
-        """Single high-signal word alone (no medium) = no trigger."""
+    def test_single_high_signal_triggers(self) -> None:
+        """Under the scoring gate a single high-signal word (1.0) hits the
+        threshold alone — this is the coverage fix that closes long
+        product-review blackouts."""
         segments = [
             TranscriptSegment(start=0.0, end=3.0, text="The chart grows"),
         ]
         triggers = detect_triggers(segments)
+        assert len(triggers) == 1
+
+    def test_medium_plus_two_deictics_triggers(self) -> None:
+        """0.5 (medium) + 2 × 0.3 (deictic) = 1.1 ≥ 1.0 → trigger."""
+        segments = [
+            TranscriptSegment(start=0.0, end=2.0, text="look here there"),
+        ]
+        triggers = detect_triggers(segments)
+        assert len(triggers) == 1
+
+    def test_single_deictic_no_trigger(self) -> None:
+        """A bare deictic is too weak to fire on its own."""
+        segments = [
+            TranscriptSegment(start=0.0, end=2.0, text="this is nice"),
+        ]
+        triggers = detect_triggers(segments)
         assert len(triggers) == 0
+
+    def test_product_review_vocab_triggers(self) -> None:
+        """New product-review vocabulary picks up UI references the old
+        UI-only lexicon missed."""
+        segments = [
+            TranscriptSegment(start=0.0, end=3.0, text="the rollout status banner"),
+        ]
+        triggers = detect_triggers(segments)
+        assert len(triggers) == 1
 
     def test_punctuation_attached_to_keywords(self) -> None:
         """Words with attached punctuation should still match."""
