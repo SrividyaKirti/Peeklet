@@ -68,6 +68,13 @@ def test_demo_mode_end_to_end_with_fake_llm(
         "build_llm_client",
         lambda provider, model: fake_client,
     )
+    # Ensure pytesseract is seen as available (demo mode requires it).
+    monkeypatch.setattr(df_module, "pytesseract", MagicMock())
+    monkeypatch.setattr(
+        df_module,
+        "_count_words_in_frame",
+        lambda frame, downscale_dim: 10,
+    )
 
     results = process_video(video_path, cfg)
 

@@ -179,7 +179,7 @@ def test_demo_filter_config_defaults():
     assert cfg.demo_filter.frame_search_resolution == 360
     assert cfg.demo_filter.ssim_stability_threshold == 0.92
     assert cfg.demo_filter.forward_search_step_sec == 0.5
-    assert cfg.demo_filter.forward_search_window_max_sec == 5.0
+    assert cfg.demo_filter.forward_search_window_max_sec == 10.0
     assert cfg.demo_filter.gallery_min_words == 5
 
 
