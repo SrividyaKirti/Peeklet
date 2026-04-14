@@ -56,6 +56,7 @@ def build_context(
                 "textual_anchor": r.textual_anchor or "",
                 "downstream_utility": r.downstream_utility or "",
                 "moment_source": r.moment_source or "",
+                "alignment_confidence": r.alignment_confidence or "content",
             }
         )
         prev_ts = ts

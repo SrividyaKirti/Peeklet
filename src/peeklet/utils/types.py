@@ -96,3 +96,4 @@ class FrameResult:
     textual_anchor: str | None = None
     downstream_utility: str | None = None
     moment_source: str | None = None  # "llm" | "anchor"
+    alignment_confidence: Literal["content", "temporal_only"] | None = None
