@@ -52,6 +52,10 @@ def build_context(
                 "change_magnitude": r.change_magnitude,
                 "seconds_since_prev_screenshot": since_prev,
                 "transcript_ids": [],
+                "visual_context_goal": r.visual_context_goal or "",
+                "textual_anchor": r.textual_anchor or "",
+                "downstream_utility": r.downstream_utility or "",
+                "moment_source": r.moment_source or "",
             }
         )
         prev_ts = ts
@@ -66,6 +70,7 @@ def build_context(
                 "start": format_timestamp(seg.start),
                 "end": format_timestamp(seg.end),
                 "text": seg.text,
+                "speaker": seg.speaker,
                 "screenshot_ids": [],
             }
         )
@@ -112,46 +117,69 @@ def _format_duration(seconds: float) -> str:
 
 def _screenshot_block(s: dict[str, Any]) -> list[str]:
     """Render a screenshot annotation block as Markdown lines."""
-    trigger_label = (s["trigger"] or "visual_change").replace("_", " ")
-    since = s["seconds_since_prev_screenshot"]
-    since_str = f"{since:.1f}s" if since is not None else "\u2014"
-    return [
-        f"## Screenshot {s['id']} ({s['timestamp']}) — {trigger_label}",
-        f"![{s['file']}]({s['file']})",
-        f"**Change:** {s['change_magnitude']} | **Since prev:** {since_str}",
-        "",
+    goal = s.get("visual_context_goal") or (s.get("trigger") or "visual_change").replace("_", " ")
+    lines = [
+        f"**Screenshot {s['id']} ({s['timestamp']}) — {goal}**",
+        f"![Screenshot]({s['file']})",
     ]
+    utility = s.get("downstream_utility")
+    if utility:
+        lines.append(f"*{utility}*")
+    anchor = s.get("textual_anchor")
+    if anchor:
+        lines.append("")
+        lines.append(f"> {anchor}")
+    lines.append("")
+    return lines
+
+
+def _format_short_timestamp(seconds: float) -> str:
+    """Format seconds as M:SS or H:MM:SS for display."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
 
 def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
-    """Write context data as Markdown — the original transcript with
-    screenshot annotation blocks injected inline at their timestamp positions.
-
-    The transcript is the primary document. Screenshots are inserted between
-    transcript segments at the chronological position matching their
-    ``timestamp_s``. If there is no transcript, screenshots are listed in
-    chronological order.
+    """Write context data as Markdown — chronologically interleaved transcript
+    and screenshot blocks optimized for downstream MLLM consumption.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     video = ctx["video"]
     lines: list[str] = [
-        f"# Video Summary: {video['filename']}",
+        f"# Meeting Context: {video['filename']}",
+        "",
         f"Duration: {_format_duration(video['duration_s'])}"
         f" | Screenshots: {video['total_screenshots']}",
         "",
-        "---",
-        "",
     ]
 
-    transcript = sorted(ctx["transcript"], key=lambda t: t["start_s"])
     screenshots = sorted(ctx["screenshots"], key=lambda s: s["timestamp_s"])
 
-    # Merge transcript and screenshots in chronological order. A screenshot
-    # is emitted right before the next transcript segment that starts after
-    # the screenshot's timestamp, so it appears immediately after the line
-    # being spoken when the visual change occurred.
+    # Visual Table of Contents
+    if screenshots:
+        lines.append("## Visual Table of Contents")
+        lines.append("")
+        lines.append("| # | Time | Visual Context |")
+        lines.append("|---|------|---------------|")
+        for s in screenshots:
+            short_ts = _format_short_timestamp(s["timestamp_s"])
+            goal = s.get("visual_context_goal") or "\u2014"
+            lines.append(f"| {s['id']} | {short_ts} | {goal} |")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    lines.append("## Timeline")
+    lines.append("")
+
+    transcript = sorted(ctx["transcript"], key=lambda t: t["start_s"])
+
     seg_idx = 0
     shot_idx = 0
     inf = float("inf")
@@ -163,7 +191,12 @@ def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
 
         if next_seg_time <= next_shot_time:
             seg = transcript[seg_idx]
-            lines.append(f"**[{seg['start']} \u2192 {seg['end']}]** {seg['text']}")
+            speaker = seg.get("speaker")
+            if speaker:
+                lines.append(f"**[{seg['start']} \u2192 {seg['end']}] {speaker}**")
+            else:
+                lines.append(f"**[{seg['start']} \u2192 {seg['end']}]**")
+            lines.append(seg["text"])
             lines.append("")
             seg_idx += 1
         else:
