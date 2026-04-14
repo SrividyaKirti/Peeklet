@@ -16,13 +16,12 @@ import numpy as np
 
 from peeklet.core.exporter import save_keyframe
 from peeklet.core.llm import build_llm_client
-from peeklet.utils.types import EventType, FrameResult
+from peeklet.utils.types import EventType, FrameResult, Moment
 
 if TYPE_CHECKING:
     from peeklet.config import DemoFilterConfig
     from peeklet.core.audio import TranscriptSegment
     from peeklet.core.video import VideoDecoder
-    from peeklet.utils.types import Moment
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +190,34 @@ def _pick_stable_index(
     return 0
 
 
+def merge_moments(
+    anchors: list[Moment],
+    llm_picks: list[Moment],
+    proximity_sec: float = 5.0,
+) -> list[Moment]:
+    """Merge anchor and LLM-picked moments.
+
+    All anchors are kept unconditionally. LLM picks within
+    +/-proximity_sec of any anchor are dropped. Result is sorted
+    by timestamp.
+    """
+    anchor_timestamps = [a.timestamp for a in anchors]
+    filtered_llm: list[Moment] = []
+    for pick in llm_picks:
+        if any(abs(pick.timestamp - at) <= proximity_sec for at in anchor_timestamps):
+            logger.info(
+                "LLM pick at %.2fs dropped — within %.1fs of an anchor",
+                pick.timestamp,
+                proximity_sec,
+            )
+            continue
+        filtered_llm.append(pick)
+
+    combined = list(anchors) + filtered_llm
+    combined.sort(key=lambda m: m.timestamp)
+    return combined
+
+
 def select_frames_for_moments(
     decoder: VideoDecoder,
     moments: list[Moment],
@@ -217,12 +244,14 @@ def select_frames_for_moments(
         tail_cutoff = meta.duration * (1.0 - config.tail_skip_ratio)
 
     for idx, moment in enumerate(moments, start=1):
-        if tail_cutoff is not None and moment.timestamp >= tail_cutoff:
+        is_anchor = moment.source == "anchor"
+
+        if not is_anchor and tail_cutoff is not None and moment.timestamp >= tail_cutoff:
             logger.info(
                 "Moment at %.2fs ('%s') falls in the final %.1f%% of the video "
                 "(cutoff %.2fs), skipping as meeting-end noise.",
                 moment.timestamp,
-                moment.caption,
+                moment.visual_context_goal,
                 config.tail_skip_ratio * 100.0,
                 tail_cutoff,
             )
@@ -233,7 +262,7 @@ def select_frames_for_moments(
             logger.warning(
                 "LLM moment at %.2fs ('%s') has no matching transcript segment, skipping",
                 moment.timestamp,
-                moment.caption,
+                moment.visual_context_goal,
             )
             continue
 
@@ -267,18 +296,18 @@ def select_frames_for_moments(
                 "LLM picked moment at %.2fs ('%s') but the frame is gallery-view "
                 "or blank — no demo content visible. Skipping.",
                 moment.timestamp,
-                moment.caption,
+                moment.visual_context_goal,
             )
             continue
 
-        if last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
+        if not is_anchor and last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
             dedup_score = compare_frames(picked_frame, last_saved_frame).ssim_score
             if dedup_score > config.dedup_ssim_threshold:
                 logger.info(
                     "Moment at %.2fs ('%s') is a near-duplicate of the previous "
                     "keyframe (ssim=%.3f > %.3f), skipping.",
                     moment.timestamp,
-                    moment.caption,
+                    moment.visual_context_goal,
                     dedup_score,
                     config.dedup_ssim_threshold,
                 )
@@ -303,8 +332,10 @@ def select_frames_for_moments(
                 video_timestamp=picked_ts,
                 video_frame_number=picked_frame_num,
                 video_duration=meta.duration,
-                llm_caption=moment.caption,
-                llm_reason=moment.reason,
+                visual_context_goal=moment.visual_context_goal,
+                textual_anchor=moment.textual_anchor,
+                downstream_utility=moment.downstream_utility,
+                moment_source=moment.source,
                 keyframe_index=idx,
             )
         )

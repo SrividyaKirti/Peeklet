@@ -215,7 +215,11 @@ def test_select_frames_for_moments_picks_first_stable_frame(tmp_path, monkeypatc
         int(ts * 30),
     )
 
-    moments = [Moment(timestamp=10.0, caption="cap", reason="reason")]
+    moments = [
+        Moment(
+            timestamp=10.0, visual_context_goal="cap", textual_anchor="t", downstream_utility="u"
+        )
+    ]
     transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
     cfg = DemoFilterConfig(
         enabled=True,
@@ -241,8 +245,7 @@ def test_select_frames_for_moments_picks_first_stable_frame(tmp_path, monkeypatc
     assert len(results) == 1
     r = results[0]
     assert r.is_keyframe is True
-    assert r.llm_caption == "cap"
-    assert r.llm_reason == "reason"
+    assert r.visual_context_goal == "cap"
     # With all-identical frames, _pick_stable_index returns index 1 (first
     # checkable position) → ts == 10.5. Just assert the picked frame is in
     # the search window.
@@ -264,7 +267,11 @@ def test_select_frames_for_moments_drops_gallery_frames(tmp_path, monkeypatch):
         int(ts * 30),
     )
 
-    moments = [Moment(timestamp=10.0, caption="cap", reason="reason")]
+    moments = [
+        Moment(
+            timestamp=10.0, visual_context_goal="cap", textual_anchor="t", downstream_utility="u"
+        )
+    ]
     transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=5)
 
@@ -300,7 +307,9 @@ def test_select_frames_for_moments_drops_moment_with_no_segment(tmp_path, monkey
         lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
     )
 
-    moments = [Moment(timestamp=50.0, caption="c", reason="r")]
+    moments = [
+        Moment(timestamp=50.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u")
+    ]
     transcript = [TranscriptSegment(start=0.0, end=10.0, text="x")]
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
 
@@ -325,7 +334,9 @@ def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
     transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
 
-    fake_moments = [Moment(timestamp=10.0, caption="c", reason="r")]
+    fake_moments = [
+        Moment(timestamp=10.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u")
+    ]
     fake_client = MagicMock()
     fake_client.pick_moments.return_value = fake_moments
 
@@ -352,7 +363,7 @@ def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
 
     fake_client.pick_moments.assert_called_once_with(transcript, 60.0)
     assert len(results) == 1
-    assert results[0].llm_caption == "c"
+    assert results[0].visual_context_goal == "c"
 
 
 def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, caplog):
@@ -504,8 +515,15 @@ def test_select_frames_for_moments_dedups_near_duplicate_second_moment(tmp_path,
     _patch_save_keyframe(monkeypatch, tmp_path)
 
     moments = [
-        Moment(timestamp=10.0, caption="first", reason="r"),
-        Moment(timestamp=100.0, caption="second", reason="r"),
+        Moment(
+            timestamp=10.0, visual_context_goal="first", textual_anchor="t", downstream_utility="u"
+        ),
+        Moment(
+            timestamp=100.0,
+            visual_context_goal="second",
+            textual_anchor="t",
+            downstream_utility="u",
+        ),
     ]
     transcript = [
         TranscriptSegment(start=8.0, end=12.0, text="a"),
@@ -522,7 +540,7 @@ def test_select_frames_for_moments_dedups_near_duplicate_second_moment(tmp_path,
     )
 
     assert len(results) == 1
-    assert results[0].llm_caption == "first"
+    assert results[0].visual_context_goal == "first"
 
 
 def test_select_frames_for_moments_keeps_distinct_second_moment(tmp_path, monkeypatch):
@@ -543,8 +561,15 @@ def test_select_frames_for_moments_keeps_distinct_second_moment(tmp_path, monkey
     _patch_save_keyframe(monkeypatch, tmp_path)
 
     moments = [
-        Moment(timestamp=10.0, caption="first", reason="r"),
-        Moment(timestamp=100.0, caption="second", reason="r"),
+        Moment(
+            timestamp=10.0, visual_context_goal="first", textual_anchor="t", downstream_utility="u"
+        ),
+        Moment(
+            timestamp=100.0,
+            visual_context_goal="second",
+            textual_anchor="t",
+            downstream_utility="u",
+        ),
     ]
     transcript = [
         TranscriptSegment(start=8.0, end=12.0, text="a"),
@@ -561,7 +586,7 @@ def test_select_frames_for_moments_keeps_distinct_second_moment(tmp_path, monkey
     )
 
     assert len(results) == 2
-    assert [r.llm_caption for r in results] == ["first", "second"]
+    assert [r.visual_context_goal for r in results] == ["first", "second"]
 
 
 def test_select_frames_for_moments_dedup_disabled_when_threshold_is_one(tmp_path, monkeypatch):
@@ -580,8 +605,10 @@ def test_select_frames_for_moments_dedup_disabled_when_threshold_is_one(tmp_path
     _patch_save_keyframe(monkeypatch, tmp_path)
 
     moments = [
-        Moment(timestamp=10.0, caption="a", reason="r"),
-        Moment(timestamp=100.0, caption="b", reason="r"),
+        Moment(timestamp=10.0, visual_context_goal="a", textual_anchor="t", downstream_utility="u"),
+        Moment(
+            timestamp=100.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+        ),
     ]
     transcript = [
         TranscriptSegment(start=8.0, end=12.0, text="x"),
@@ -616,9 +643,13 @@ def test_select_frames_for_moments_dedup_drops_all_when_threshold_is_zero(tmp_pa
     _patch_save_keyframe(monkeypatch, tmp_path)
 
     moments = [
-        Moment(timestamp=10.0, caption="a", reason="r"),
-        Moment(timestamp=100.0, caption="b", reason="r"),
-        Moment(timestamp=200.0, caption="c", reason="r"),
+        Moment(timestamp=10.0, visual_context_goal="a", textual_anchor="t", downstream_utility="u"),
+        Moment(
+            timestamp=100.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+        ),
+        Moment(
+            timestamp=200.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
+        ),
     ]
     transcript = [
         TranscriptSegment(start=8.0, end=12.0, text="x"),
@@ -636,7 +667,7 @@ def test_select_frames_for_moments_dedup_drops_all_when_threshold_is_zero(tmp_pa
     )
 
     assert len(results) == 1
-    assert results[0].llm_caption == "a"
+    assert results[0].visual_context_goal == "a"
 
 
 def test_select_frames_for_moments_tail_skip_drops_moment_past_cutoff(tmp_path, monkeypatch):
@@ -655,7 +686,11 @@ def test_select_frames_for_moments_tail_skip_drops_moment_past_cutoff(tmp_path, 
     _patch_save_keyframe(monkeypatch, tmp_path)
 
     # 99.0 / 100.0 = 0.99 → past the 0.98 cutoff.
-    moments = [Moment(timestamp=99.0, caption="end", reason="r")]
+    moments = [
+        Moment(
+            timestamp=99.0, visual_context_goal="end", textual_anchor="t", downstream_utility="u"
+        )
+    ]
     transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
 
@@ -685,7 +720,14 @@ def test_select_frames_for_moments_tail_skip_keeps_moment_before_cutoff(tmp_path
     )
     _patch_save_keyframe(monkeypatch, tmp_path)
 
-    moments = [Moment(timestamp=95.0, caption="near-end", reason="r")]
+    moments = [
+        Moment(
+            timestamp=95.0,
+            visual_context_goal="near-end",
+            textual_anchor="t",
+            downstream_utility="u",
+        )
+    ]
     transcript = [TranscriptSegment(start=93.0, end=98.0, text="x")]
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
 
@@ -698,7 +740,7 @@ def test_select_frames_for_moments_tail_skip_keeps_moment_before_cutoff(tmp_path
     )
 
     assert len(results) == 1
-    assert results[0].llm_caption == "near-end"
+    assert results[0].visual_context_goal == "near-end"
 
 
 def test_select_frames_for_moments_tail_skip_disabled_when_ratio_is_zero(tmp_path, monkeypatch):
@@ -716,7 +758,11 @@ def test_select_frames_for_moments_tail_skip_disabled_when_ratio_is_zero(tmp_pat
     )
     _patch_save_keyframe(monkeypatch, tmp_path)
 
-    moments = [Moment(timestamp=99.0, caption="end", reason="r")]
+    moments = [
+        Moment(
+            timestamp=99.0, visual_context_goal="end", textual_anchor="t", downstream_utility="u"
+        )
+    ]
     transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.0)
 
@@ -729,3 +775,166 @@ def test_select_frames_for_moments_tail_skip_disabled_when_ratio_is_zero(tmp_pat
     )
 
     assert len(results) == 1
+
+
+def test_anchor_moment_skips_dedup(tmp_path, monkeypatch):
+    """Anchor moments bypass the dedup filter — two identical anchors both saved."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=600.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [
+        Moment(
+            timestamp=10.0,
+            visual_context_goal="first",
+            textual_anchor="t",
+            downstream_utility="u",
+            source="anchor",
+        ),
+        Moment(
+            timestamp=100.0,
+            visual_context_goal="second",
+            textual_anchor="t",
+            downstream_utility="u",
+            source="anchor",
+        ),
+    ]
+    transcript = [
+        TranscriptSegment(start=8.0, end=12.0, text="a"),
+        TranscriptSegment(start=98.0, end=102.0, text="b"),
+    ]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.95)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+    assert len(results) == 2
+
+
+def test_anchor_moment_skips_tail_skip(tmp_path, monkeypatch):
+    """Anchor moments near the end of video bypass tail_skip."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import select_frames_for_moments
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=100.0)
+    decoder.extract_frame_at.side_effect = lambda ts: (
+        np.full((100, 100, 3), 100, dtype=np.uint8),
+        float(ts),
+        int(ts * 30),
+    )
+    _patch_save_keyframe(monkeypatch, tmp_path)
+
+    moments = [
+        Moment(
+            timestamp=99.0,
+            visual_context_goal="end anchor",
+            textual_anchor="t",
+            downstream_utility="u",
+            source="anchor",
+        ),
+    ]
+    transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
+
+    results = select_frames_for_moments(
+        decoder=decoder,
+        moments=moments,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+    assert len(results) == 1
+
+
+class TestMergeMoments:
+    def test_anchors_kept_llm_near_anchor_dropped(self):
+        from peeklet.core.demo_filter import merge_moments
+        from peeklet.utils.types import Moment
+
+        anchors = [
+            Moment(
+                timestamp=232.0,
+                visual_context_goal="a",
+                textual_anchor="t",
+                downstream_utility="u",
+                source="anchor",
+            ),
+        ]
+        llm_picks = [
+            Moment(
+                timestamp=230.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+            ),
+            Moment(
+                timestamp=500.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
+            ),
+        ]
+        merged = merge_moments(anchors, llm_picks, proximity_sec=5.0)
+        assert len(merged) == 2
+        assert merged[0].timestamp == 232.0
+        assert merged[0].source == "anchor"
+        assert merged[1].timestamp == 500.0
+        assert merged[1].source == "llm"
+
+    def test_all_anchors_kept_when_no_llm_picks(self):
+        from peeklet.core.demo_filter import merge_moments
+        from peeklet.utils.types import Moment
+
+        anchors = [
+            Moment(
+                timestamp=100.0,
+                visual_context_goal="a",
+                textual_anchor="t",
+                downstream_utility="u",
+                source="anchor",
+            ),
+            Moment(
+                timestamp=200.0,
+                visual_context_goal="b",
+                textual_anchor="t",
+                downstream_utility="u",
+                source="anchor",
+            ),
+        ]
+        merged = merge_moments(anchors, [], proximity_sec=5.0)
+        assert len(merged) == 2
+
+    def test_sorted_by_timestamp(self):
+        from peeklet.core.demo_filter import merge_moments
+        from peeklet.utils.types import Moment
+
+        anchors = [
+            Moment(
+                timestamp=500.0,
+                visual_context_goal="a",
+                textual_anchor="t",
+                downstream_utility="u",
+                source="anchor",
+            ),
+        ]
+        llm_picks = [
+            Moment(
+                timestamp=100.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+            ),
+        ]
+        merged = merge_moments(anchors, llm_picks, proximity_sec=5.0)
+        assert [m.timestamp for m in merged] == [100.0, 500.0]
+
+    def test_empty_inputs(self):
+        from peeklet.core.demo_filter import merge_moments
+
+        assert merge_moments([], [], proximity_sec=5.0) == []
