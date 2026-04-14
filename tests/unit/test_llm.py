@@ -12,10 +12,20 @@ def _make_segments():
 
     return [
         TranscriptSegment(
-            start=0.0, end=3.5, text="Hey everyone, today I'll show you the dashboard."
+            start=0.0,
+            end=3.5,
+            text="Hey everyone, today I'll show you the dashboard.",
+            speaker="Alice",
         ),
-        TranscriptSegment(start=3.5, end=8.2, text="Let me start by signing in here."),
-        TranscriptSegment(start=8.2, end=12.1, text="Okay, this is the main view after login."),
+        TranscriptSegment(
+            start=3.5, end=8.2, text="Let me start by signing in here.", speaker="Bob"
+        ),
+        TranscriptSegment(
+            start=8.2,
+            end=12.1,
+            text="Okay, this is the main view after login.",
+            speaker="Alice",
+        ),
     ]
 
 
@@ -26,32 +36,53 @@ def test_format_transcript_includes_timestamps_and_text():
     formatted = format_transcript_for_llm(segments)
 
     assert "[0.0 - 3.5]" in formatted
+    assert "**Alice**:" in formatted
     assert "Hey everyone" in formatted
     assert "[3.5 - 8.2]" in formatted
-    assert "Let me start by signing in here." in formatted
-    # One line per segment
+    assert "**Bob**:" in formatted
     assert formatted.count("\n") >= len(segments) - 1
+
+
+def test_format_transcript_omits_speaker_when_none():
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.llm import format_transcript_for_llm
+
+    segments = [TranscriptSegment(start=0.0, end=3.0, text="Hello")]
+    formatted = format_transcript_for_llm(segments)
+    assert "[0.0 - 3.0] Hello" in formatted
+    assert "**" not in formatted
 
 
 def test_parse_moments_strips_markdown_fences():
     from peeklet.core.llm import _parse_moments_json
 
-    raw = '```json\n[{"timestamp": 12.5, "caption": "X", "reason": "Y"}]\n```'
+    raw = (
+        "```json\n"
+        '[{"timestamp": 12.5, "visual_context_goal": "X",'
+        ' "textual_anchor": "Y", "downstream_utility": "Z"}]'
+        "\n```"
+    )
     moments = _parse_moments_json(raw, video_duration=60.0)
 
     assert len(moments) == 1
     assert moments[0].timestamp == 12.5
-    assert moments[0].caption == "X"
-    assert moments[0].reason == "Y"
+    assert moments[0].visual_context_goal == "X"
+    assert moments[0].textual_anchor == "Y"
+    assert moments[0].downstream_utility == "Z"
 
 
 def test_parse_moments_drops_out_of_range_timestamps():
     from peeklet.core.llm import _parse_moments_json
 
     raw = (
-        '[{"timestamp": 5.0, "caption": "ok", "reason": "r"},'
-        ' {"timestamp": 999.0, "caption": "past end", "reason": "r"},'
-        ' {"timestamp": -1.0, "caption": "negative", "reason": "r"}]'
+        "["
+        '{"timestamp": 5.0, "visual_context_goal": "ok",'
+        ' "textual_anchor": "t", "downstream_utility": "u"},'
+        ' {"timestamp": 999.0, "visual_context_goal": "past end",'
+        ' "textual_anchor": "t", "downstream_utility": "u"},'
+        ' {"timestamp": -1.0, "visual_context_goal": "negative",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}'
+        "]"
     )
     moments = _parse_moments_json(raw, video_duration=60.0)
 
@@ -63,9 +94,14 @@ def test_parse_moments_sorted_by_timestamp():
     from peeklet.core.llm import _parse_moments_json
 
     raw = (
-        '[{"timestamp": 30.0, "caption": "c", "reason": "r"},'
-        ' {"timestamp": 5.0, "caption": "c", "reason": "r"},'
-        ' {"timestamp": 15.0, "caption": "c", "reason": "r"}]'
+        "["
+        '{"timestamp": 30.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"},'
+        ' {"timestamp": 5.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"},'
+        ' {"timestamp": 15.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}'
+        "]"
     )
     moments = _parse_moments_json(raw, video_duration=60.0)
 
@@ -82,7 +118,7 @@ def test_parse_moments_raises_on_unparseable_after_strip():
 def test_parse_moments_raises_on_missing_required_keys():
     from peeklet.core.llm import LLMResponseError, _parse_moments_json
 
-    raw = '[{"timestamp": 5.0, "caption": "no reason"}]'
+    raw = '[{"timestamp": 5.0, "visual_context_goal": "no anchor or utility"}]'
     with pytest.raises(LLMResponseError):
         _parse_moments_json(raw, video_duration=60.0)
 
@@ -115,7 +151,10 @@ def test_parse_moments_strips_preamble_before_json():
 
     raw = (
         "Here is the JSON you asked for:\n"
-        '```json\n[{"timestamp": 7.0, "caption": "c", "reason": "r"}]\n```'
+        "```json\n"
+        '[{"timestamp": 7.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+        "\n```"
     )
     moments = _parse_moments_json(raw, video_duration=60.0)
 
@@ -126,11 +165,14 @@ def test_parse_moments_strips_preamble_before_json():
 def test_parse_moments_handles_nested_brackets_in_strings():
     from peeklet.core.llm import _parse_moments_json
 
-    raw = '[{"timestamp": 1.0, "caption": "uses [brackets] in caption", "reason": "r"}]'
+    raw = (
+        '[{"timestamp": 1.0, "visual_context_goal": "uses [brackets] in goal",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
     moments = _parse_moments_json(raw, video_duration=60.0)
 
     assert len(moments) == 1
-    assert moments[0].caption == "uses [brackets] in caption"
+    assert moments[0].visual_context_goal == "uses [brackets] in goal"
 
 
 def test_parse_moments_raises_when_no_array():
@@ -147,7 +189,11 @@ def test_anthropic_client_pick_moments_calls_sdk_and_parses_response(monkeypatch
     from peeklet.utils.types import Moment
 
     fake_response = MagicMock()
-    fake_response.content = [MagicMock(text='[{"timestamp": 7.0, "caption": "c", "reason": "r"}]')]
+    _json = (
+        '[{"timestamp": 7.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
+    fake_response.content = [MagicMock(text=_json)]
 
     fake_client = MagicMock()
     fake_client.messages.create.return_value = fake_response
@@ -162,7 +208,14 @@ def test_anthropic_client_pick_moments_calls_sdk_and_parses_response(monkeypatch
     segments = _make_segments()
     moments = client.pick_moments(segments, video_duration=60.0)
 
-    assert moments == [Moment(timestamp=7.0, caption="c", reason="r")]
+    assert moments == [
+        Moment(
+            timestamp=7.0,
+            visual_context_goal="c",
+            textual_anchor="t",
+            downstream_utility="u",
+        )
+    ]
     fake_anthropic.Anthropic.assert_called_once()
     fake_client.messages.create.assert_called_once()
     call_kwargs = fake_client.messages.create.call_args.kwargs
@@ -177,7 +230,11 @@ def test_anthropic_client_retries_once_on_unparseable(monkeypatch):
     bad_response = MagicMock()
     bad_response.content = [MagicMock(text="not json")]
     good_response = MagicMock()
-    good_response.content = [MagicMock(text='[{"timestamp": 1.0, "caption": "c", "reason": "r"}]')]
+    _json = (
+        '[{"timestamp": 1.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
+    good_response.content = [MagicMock(text=_json)]
 
     fake_client = MagicMock()
     fake_client.messages.create.side_effect = [bad_response, good_response]
@@ -221,7 +278,10 @@ def test_openai_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
     from peeklet.utils.types import Moment
 
     fake_message = MagicMock()
-    fake_message.content = '[{"timestamp": 11.0, "caption": "c", "reason": "r"}]'
+    fake_message.content = (
+        '[{"timestamp": 11.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
     fake_choice = MagicMock(message=fake_message)
     fake_response = MagicMock(choices=[fake_choice])
 
@@ -236,7 +296,14 @@ def test_openai_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
     client = llm_openai.OpenAIClient(model="gpt-4o-mini")
     moments = client.pick_moments(_make_segments(), video_duration=60.0)
 
-    assert moments == [Moment(timestamp=11.0, caption="c", reason="r")]
+    assert moments == [
+        Moment(
+            timestamp=11.0,
+            visual_context_goal="c",
+            textual_anchor="t",
+            downstream_utility="u",
+        )
+    ]
     fake_client.chat.completions.create.assert_called_once()
     call_kwargs = fake_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-4o-mini"
@@ -263,7 +330,11 @@ def test_openai_client_retries_once_on_unparseable(monkeypatch):
     from peeklet.core import llm_openai
 
     bad_message = MagicMock(content="not json")
-    good_message = MagicMock(content='[{"timestamp": 1.0, "caption": "c", "reason": "r"}]')
+    _json = (
+        '[{"timestamp": 1.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
+    good_message = MagicMock(content=_json)
     bad_response = MagicMock(choices=[MagicMock(message=bad_message)])
     good_response = MagicMock(choices=[MagicMock(message=good_message)])
 
@@ -316,7 +387,10 @@ def test_openrouter_client_pick_moments_calls_sdk_and_parses_response(monkeypatc
     from peeklet.utils.types import Moment
 
     fake_message = MagicMock()
-    fake_message.content = '[{"timestamp": 13.0, "caption": "c", "reason": "r"}]'
+    fake_message.content = (
+        '[{"timestamp": 13.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
     fake_choice = MagicMock(message=fake_message)
     fake_response = MagicMock(choices=[fake_choice])
 
@@ -331,7 +405,14 @@ def test_openrouter_client_pick_moments_calls_sdk_and_parses_response(monkeypatc
     client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
     moments = client.pick_moments(_make_segments(), video_duration=60.0)
 
-    assert moments == [Moment(timestamp=13.0, caption="c", reason="r")]
+    assert moments == [
+        Moment(
+            timestamp=13.0,
+            visual_context_goal="c",
+            textual_anchor="t",
+            downstream_utility="u",
+        )
+    ]
     fake_client.chat.completions.create.assert_called_once()
     call_kwargs = fake_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "anthropic/claude-3.5-sonnet"
@@ -343,7 +424,11 @@ def test_openrouter_client_retries_once_on_unparseable(monkeypatch):
     from peeklet.core import llm_openrouter
 
     bad_message = MagicMock(content="not json")
-    good_message = MagicMock(content='[{"timestamp": 1.0, "caption": "c", "reason": "r"}]')
+    _json = (
+        '[{"timestamp": 1.0, "visual_context_goal": "c",'
+        ' "textual_anchor": "t", "downstream_utility": "u"}]'
+    )
+    good_message = MagicMock(content=_json)
     bad_response = MagicMock(choices=[MagicMock(message=bad_message)])
     good_response = MagicMock(choices=[MagicMock(message=good_message)])
 
