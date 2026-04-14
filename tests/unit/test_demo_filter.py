@@ -1587,3 +1587,251 @@ class TestGapFill:
         # candidate is rejected at a specific midpoint.
         llm_sources = [r for r in results if r.moment_source == "llm"]
         assert len(llm_sources) == 2
+
+
+class TestNormalizeTokens:
+    def test_lowercases_and_drops_stopwords(self):
+        from peeklet.core.demo_filter import _normalize_tokens
+
+        tokens = _normalize_tokens("The Settings Dashboard")
+        assert tokens == {"settings", "dashboard"}
+
+    def test_drops_short_tokens(self):
+        from peeklet.core.demo_filter import _normalize_tokens
+
+        # "ab" is <3 chars; "an" is a stopword; "log" survives.
+        assert _normalize_tokens("ab an log") == {"log"}
+
+    def test_empty_input(self):
+        from peeklet.core.demo_filter import _normalize_tokens
+
+        assert _normalize_tokens("") == set()
+
+
+class TestCaptionImageAlignment:
+    def _base_moment(self, ts: float = 10.0):
+        from peeklet.utils.types import Moment
+
+        return Moment(
+            timestamp=ts,
+            visual_context_goal="Invoice approval dashboard",
+            textual_anchor="clicks approve button",
+            downstream_utility="u",
+        )
+
+    def _make_config(self, **overrides):
+        from peeklet.config import DemoFilterConfig
+
+        defaults = dict(
+            enabled=True,
+            forward_search_step_sec=0.5,
+            forward_search_window_max_sec=4.0,
+            search_window_lookback_sec=2.0,
+            gallery_min_words=0,
+            dedup_ssim_threshold=1.0,
+            phash_hamming_threshold=0,
+            max_seconds_between_keyframes=0.0,
+        )
+        defaults.update(overrides)
+        return DemoFilterConfig(**defaults)
+
+    def test_content_confidence_when_ocr_matches_caption(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+
+        decoder = _make_decoder_for_moments(meta_duration=60.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+        monkeypatch.setattr(
+            demo_filter,
+            "_ocr_tokens",
+            lambda frame, downscale_dim: {"invoice", "approval", "dashboard"},
+        )
+
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=[self._base_moment()],
+            transcript=[TranscriptSegment(start=0.0, end=30.0, text="x")],
+            config=self._make_config(),
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 1
+        assert results[0].alignment_confidence == "content"
+
+    def test_temporal_only_when_no_overlap_even_after_widening(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+
+        decoder = _make_decoder_for_moments(meta_duration=60.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+        monkeypatch.setattr(
+            demo_filter,
+            "_ocr_tokens",
+            lambda frame, downscale_dim: {"unrelated", "toolbar"},
+        )
+
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=[self._base_moment()],
+            transcript=[TranscriptSegment(start=0.0, end=30.0, text="x")],
+            config=self._make_config(),
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 1
+        # Frame is still kept — the rejector only drops low-info frames,
+        # not caption-misaligned ones. But the confidence is downgraded.
+        assert results[0].alignment_confidence == "temporal_only"
+
+    def test_widening_recovers_caption_aligned_frame(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+
+        decoder = _make_decoder_for_moments(meta_duration=60.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+
+        calls = {"n": 0}
+
+        def _tokens(frame, downscale_dim):
+            # First call (initial window): no overlap. Second call (widened
+            # retry): matches the caption.
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"unrelated"}
+            return {"invoice", "dashboard"}
+
+        monkeypatch.setattr(demo_filter, "_ocr_tokens", _tokens)
+
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=[self._base_moment()],
+            transcript=[TranscriptSegment(start=0.0, end=30.0, text="x")],
+            config=self._make_config(),
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 1
+        assert results[0].alignment_confidence == "content"
+        assert calls["n"] == 2
+
+    def test_skips_retry_when_window_already_spans_segment(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+
+        decoder = _make_decoder_for_moments(meta_duration=60.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+
+        calls = {"n": 0}
+
+        def _tokens(frame, downscale_dim):
+            calls["n"] += 1
+            return {"unrelated"}
+
+        monkeypatch.setattr(demo_filter, "_ocr_tokens", _tokens)
+
+        # Tiny segment — initial window is clamped to it entirely, so the
+        # widened retry would produce the same window and is skipped.
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=[self._base_moment(ts=10.0)],
+            transcript=[TranscriptSegment(start=9.9, end=10.1, text="x")],
+            config=self._make_config(),
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 1
+        assert results[0].alignment_confidence == "temporal_only"
+        assert calls["n"] == 1
+
+    def test_empty_caption_defaults_to_content(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        decoder = _make_decoder_for_moments(meta_duration=60.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+        monkeypatch.setattr(demo_filter, "_ocr_tokens", lambda frame, downscale_dim: set())
+
+        moment = Moment(
+            timestamp=10.0,
+            visual_context_goal="",
+            textual_anchor="",
+            downstream_utility="u",
+        )
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=[moment],
+            transcript=[TranscriptSegment(start=0.0, end=30.0, text="x")],
+            config=self._make_config(),
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 1
+        assert results[0].alignment_confidence == "content"
+
+    def test_gap_fill_frames_are_temporal_only(self, tmp_path, monkeypatch):
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        decoder = _make_decoder_for_moments(meta_duration=600.0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+        monkeypatch.setattr(
+            demo_filter,
+            "_ocr_tokens",
+            lambda frame, downscale_dim: {"invoice", "dashboard"},
+        )
+
+        moments = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="Invoice dashboard",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+            Moment(
+                timestamp=400.0,
+                visual_context_goal="Invoice dashboard",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+        ]
+        transcript = [TranscriptSegment(start=0.0, end=500.0, text="x")]
+        cfg = self._make_config(max_seconds_between_keyframes=120.0)
+
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=moments,
+            transcript=transcript,
+            config=cfg,
+            output_dir=tmp_path,
+        )
+
+        gap_fills = [r for r in results if r.moment_source == "gap_fill"]
+        assert gap_fills, "expected at least one gap-fill frame"
+        for r in gap_fills:
+            assert r.alignment_confidence == "temporal_only"

@@ -9,6 +9,7 @@ gallery check. See the design spec at
 from __future__ import annotations
 
 import logging
+import re
 from collections import namedtuple
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -115,6 +116,93 @@ def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
     name. All new code should consume :func:`_ocr_word_boxes` directly.
     """
     return len(_ocr_word_boxes(frame, downscale_dim))
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# English stopwords that would otherwise manufacture false-positive overlaps
+# between a generic caption ("the dashboard") and any frame with common chrome.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "or",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "to",
+        "of",
+        "in",
+        "on",
+        "at",
+        "by",
+        "for",
+        "from",
+        "with",
+        "into",
+        "onto",
+        "as",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "we",
+        "they",
+        "he",
+        "she",
+        "i",
+        "you",
+        "our",
+        "your",
+        "their",
+        "my",
+        "show",
+        "shows",
+        "showing",
+        "view",
+        "viewing",
+        "see",
+        "click",
+        "page",
+        "screen",
+        "panel",
+        "section",
+        "tab",
+        "window",
+    }
+)
+
+
+def _normalize_tokens(text: str) -> set[str]:
+    """Return lowercase alphanumeric tokens from ``text`` with stopwords removed.
+
+    Used for caption/image alignment: both the picked frame's OCR and the
+    moment's caption go through this so overlap is computed on a stable
+    canonical form. Short tokens (<3 chars) are dropped — they're mostly
+    single letters that introduce noise.
+    """
+    tokens = {t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 3}
+    return tokens - _STOPWORDS
+
+
+def _ocr_tokens(frame: np.ndarray, downscale_dim: int) -> set[str]:
+    """Normalized token set extracted from ``frame`` via OCR.
+
+    Runs the same word-box OCR as :func:`_ocr_word_boxes` and normalizes
+    each accepted box's text through :func:`_normalize_tokens`.
+    """
+    boxes = _ocr_word_boxes(frame, downscale_dim)
+    if not boxes:
+        return set()
+    joined = " ".join(b.text for b in boxes)
+    return _normalize_tokens(joined)
 
 
 def _count_text_lines(boxes: list[WordBox]) -> int:
@@ -335,13 +423,16 @@ def _pick_frame_for_moment(
     moment: Moment,
     transcript: list[TranscriptSegment],
     config: DemoFilterConfig,
-) -> tuple[np.ndarray, float, int] | None:
+    extra_window_sec: float = 0.0,
+) -> tuple[np.ndarray, float, int, tuple[float, float]] | None:
     """Run the search-window + scoring + low-info gates for one moment.
 
-    Returns the (frame, timestamp, frame_number) of the picked frame, or
-    ``None`` if no transcript segment matches, no frames can be
-    extracted, or the picked frame fails the low-info gate. Dedup and
-    tail-skip are the caller's responsibility.
+    Returns ``(frame, timestamp, frame_number, (win_start, win_end))`` for
+    the picked frame, or ``None`` if no transcript segment matches, no
+    frames can be extracted, or the picked frame fails the low-info gate.
+    Dedup and tail-skip are the caller's responsibility. ``extra_window_sec``
+    widens the search window symmetrically (still clamped to segment
+    bounds) — used by the caption/image alignment retry path.
     """
     seg = _find_segment_for_timestamp(moment.timestamp, transcript)
     if seg is None:
@@ -355,8 +446,8 @@ def _pick_frame_for_moment(
     win_start, win_end = _build_search_window(
         moment_ts=moment.timestamp,
         segment=seg,
-        max_window_sec=config.forward_search_window_max_sec,
-        lookback_sec=config.search_window_lookback_sec,
+        max_window_sec=config.forward_search_window_max_sec + extra_window_sec,
+        lookback_sec=config.search_window_lookback_sec + extra_window_sec,
     )
     samples = _sample_window_frames(
         decoder=decoder,
@@ -383,7 +474,7 @@ def _pick_frame_for_moment(
         )
         return None
 
-    return picked_frame, picked_ts, picked_frame_num
+    return picked_frame, picked_ts, picked_frame_num, (win_start, win_end)
 
 
 def _fill_coverage_gaps(
@@ -440,7 +531,7 @@ def _fill_coverage_gaps(
                     midpoint,
                 )
                 continue
-            picked_frame, picked_ts, picked_frame_num = picked
+            picked_frame, picked_ts, picked_frame_num, _win = picked
             frame_id = f"demo_gapfill_{int(picked_ts * 1000):08d}ms"
             asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
             filled.append(
@@ -462,6 +553,7 @@ def _fill_coverage_gaps(
                     textual_anchor=synthetic.textual_anchor,
                     downstream_utility=synthetic.downstream_utility,
                     moment_source="gap_fill",
+                    alignment_confidence="temporal_only",
                 )
             )
             inserted = True
@@ -546,7 +638,53 @@ def select_frames_for_moments(
         picked = _pick_frame_for_moment(decoder, moment, transcript, config)
         if picked is None:
             continue
-        picked_frame, picked_ts, picked_frame_num = picked
+        picked_frame, picked_ts, picked_frame_num, picked_window = picked
+
+        caption_tokens = _normalize_tokens(f"{moment.visual_context_goal} {moment.textual_anchor}")
+        alignment_confidence: str = "content"
+        if caption_tokens:
+            frame_tokens = _ocr_tokens(picked_frame, config.gallery_ocr_min_dim)
+            if not (frame_tokens & caption_tokens):
+                # Try widening the search window once before falling back to
+                # temporal_only. Skip the retry if the initial window already
+                # spans the whole containing transcript segment (nothing to
+                # widen into).
+                seg = _find_segment_for_timestamp(moment.timestamp, transcript)
+                already_exhausted = seg is not None and (
+                    picked_window[0] <= seg.start and picked_window[1] >= seg.end
+                )
+                if not already_exhausted:
+                    retry = _pick_frame_for_moment(
+                        decoder, moment, transcript, config, extra_window_sec=5.0
+                    )
+                    if retry is not None:
+                        retry_frame, retry_ts, retry_fnum, _ = retry
+                        retry_tokens = _ocr_tokens(retry_frame, config.gallery_ocr_min_dim)
+                        if retry_tokens & caption_tokens:
+                            picked_frame, picked_ts, picked_frame_num = (
+                                retry_frame,
+                                retry_ts,
+                                retry_fnum,
+                            )
+                            logger.info(
+                                "Moment at %.2fs: widened window recovered a "
+                                "caption-aligned frame at %.2fs.",
+                                moment.timestamp,
+                                retry_ts,
+                            )
+                        else:
+                            alignment_confidence = "temporal_only"
+                    else:
+                        alignment_confidence = "temporal_only"
+                else:
+                    alignment_confidence = "temporal_only"
+                if alignment_confidence == "temporal_only":
+                    logger.info(
+                        "Moment at %.2fs ('%s'): kept temporal_only — no OCR "
+                        "token overlap with caption.",
+                        moment.timestamp,
+                        moment.visual_context_goal,
+                    )
 
         if not is_anchor and last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
             dedup_score = compare_frames(picked_frame, last_saved_frame).ssim_score
@@ -600,6 +738,7 @@ def select_frames_for_moments(
                 downstream_utility=moment.downstream_utility,
                 moment_source=moment.source,
                 keyframe_index=idx,
+                alignment_confidence=alignment_confidence,  # type: ignore[arg-type]
             )
         )
 
