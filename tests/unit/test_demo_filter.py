@@ -172,6 +172,39 @@ def test_build_search_window_caps_at_segment_end():
     assert end == 12.0
 
 
+def test_build_search_window_biases_backward_with_lookback():
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import _build_search_window
+
+    seg = TranscriptSegment(start=0.0, end=100.0, text="x")
+    start, end = _build_search_window(
+        moment_ts=50.0,
+        segment=seg,
+        max_window_sec=10.0,
+        lookback_sec=3.0,
+    )
+    # Window shifts back by lookback but width stays max_window_sec.
+    assert start == pytest.approx(47.0)
+    assert end == pytest.approx(57.0)
+
+
+def test_build_search_window_lookback_clamped_to_segment_start():
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import _build_search_window
+
+    seg = TranscriptSegment(start=10.0, end=30.0, text="x")
+    start, end = _build_search_window(
+        moment_ts=11.0,
+        segment=seg,
+        max_window_sec=5.0,
+        lookback_sec=3.0,
+    )
+    # Lookback would push start to 8.0 but segment begins at 10.0.
+    assert start == pytest.approx(10.0)
+    # End = min(30, 11 + 5 - 3) = 13.0
+    assert end == pytest.approx(13.0)
+
+
 def test_build_search_window_caps_at_max_window_when_segment_long():
     from peeklet.core.audio import TranscriptSegment
     from peeklet.core.demo_filter import _build_search_window
@@ -269,11 +302,11 @@ def test_select_frames_for_moments_picks_first_stable_frame(tmp_path, monkeypatc
     r = results[0]
     assert r.is_keyframe is True
     assert r.visual_context_goal == "cap"
-    # With all-identical frames, _pick_stable_index returns index 1 (first
-    # checkable position) → ts == 10.5. Just assert the picked frame is in
-    # the search window.
+    # Search window is biased backward by search_window_lookback_sec
+    # (default 3s) and clamped to the containing transcript segment, so
+    # any frame inside [segment.start, segment.end] is acceptable.
     assert r.video_timestamp is not None
-    assert 10.0 <= r.video_timestamp <= 12.0
+    assert 8.0 <= r.video_timestamp <= 12.0
     assert r.trigger_type == "transcript_trigger"
 
 
@@ -1366,3 +1399,191 @@ class TestPhashDedup:
             output_dir=tmp_path,
         )
         assert len(results) == 2
+
+
+class TestGapFill:
+    """Coverage-gap closer — injects synthetic gap_fill moments when the
+    distance between consecutive kept keyframes exceeds the configured
+    maximum."""
+
+    def test_gap_fill_inserts_midpoint_frame_when_gap_exceeds_max(self, tmp_path, monkeypatch):
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.core.demo_filter import select_frames_for_moments
+        from peeklet.utils.types import Moment
+
+        decoder = _make_decoder_for_moments(meta_duration=600.0)
+
+        # Each extracted frame is visually unique so SSIM / phash dedup
+        # never trips, and low-info is patched off by the autouse fixture.
+        def _extract(ts: float):
+            val = int((ts * 7) % 256)
+            return (
+                np.full((100, 100, 3), val, dtype=np.uint8),
+                float(ts),
+                int(ts * 30),
+            )
+
+        decoder.extract_frame_at.side_effect = _extract
+        _patch_save_keyframe(monkeypatch, tmp_path)
+
+        # Two real moments 300s apart; max gap is 120s so at least one
+        # gap_fill must be injected between them.
+        moments = [
+            Moment(
+                timestamp=50.0,
+                visual_context_goal="first",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+            Moment(
+                timestamp=350.0,
+                visual_context_goal="second",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+        ]
+        transcript = [
+            TranscriptSegment(start=0.0, end=600.0, text="long discussion"),
+        ]
+        cfg = DemoFilterConfig(
+            enabled=True,
+            gallery_min_words=0,
+            dedup_ssim_threshold=1.0,
+            phash_hamming_threshold=0,
+            max_seconds_between_keyframes=120.0,
+        )
+
+        results = select_frames_for_moments(
+            decoder=decoder,
+            moments=moments,
+            transcript=transcript,
+            config=cfg,
+            output_dir=tmp_path,
+        )
+
+        sources = [r.moment_source for r in results]
+        assert "gap_fill" in sources, f"expected gap_fill in {sources}"
+        timestamps = sorted(r.video_timestamp or 0.0 for r in results)
+        for a, b in zip(timestamps, timestamps[1:], strict=False):
+            assert (b - a) <= 120.0 + 1e-6, f"gap {b - a:.1f}s exceeds max"
+
+    def test_gap_fill_disabled_when_threshold_is_zero(self, tmp_path, monkeypatch):
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.core.demo_filter import select_frames_for_moments
+        from peeklet.utils.types import Moment
+
+        decoder = _make_decoder_for_moments(meta_duration=600.0)
+
+        def _extract(ts: float):
+            val = int((ts * 7) % 256)
+            return (
+                np.full((100, 100, 3), val, dtype=np.uint8),
+                float(ts),
+                int(ts * 30),
+            )
+
+        decoder.extract_frame_at.side_effect = _extract
+        _patch_save_keyframe(monkeypatch, tmp_path)
+
+        moments = [
+            Moment(
+                timestamp=50.0,
+                visual_context_goal="first",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+            Moment(
+                timestamp=350.0,
+                visual_context_goal="second",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+        ]
+        transcript = [TranscriptSegment(start=0.0, end=600.0, text="long")]
+        cfg = DemoFilterConfig(
+            enabled=True,
+            gallery_min_words=0,
+            dedup_ssim_threshold=1.0,
+            phash_hamming_threshold=0,
+            max_seconds_between_keyframes=0.0,
+        )
+
+        results = select_frames_for_moments(
+            decoder=decoder,
+            moments=moments,
+            transcript=transcript,
+            config=cfg,
+            output_dir=tmp_path,
+        )
+
+        assert len(results) == 2
+        assert all(r.moment_source != "gap_fill" for r in results)
+
+    def test_gap_fill_accepts_gap_when_midpoint_is_low_info(self, tmp_path, monkeypatch):
+        """If the midpoint frame fails the low-info gate, the gap is
+        accepted rather than forcing a bad frame."""
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        decoder = _make_decoder_for_moments(meta_duration=600.0)
+
+        def _extract(ts: float):
+            val = int((ts * 7) % 256)
+            return (
+                np.full((100, 100, 3), val, dtype=np.uint8),
+                float(ts),
+                int(ts * 30),
+            )
+
+        decoder.extract_frame_at.side_effect = _extract
+        _patch_save_keyframe(monkeypatch, tmp_path)
+
+        # Reject only gap_fill midpoints (around ts=200). The two real
+        # moments at 50 and 350 sit safely outside that range.
+        def _reject_midpoint(frame, config):
+            # Synthetic frames encode ts in the fill value ((ts*7)%256).
+            # ts=200 → val = 1400 % 256 = 120. Reject just that.
+            return int(frame[0, 0, 0]) == 120
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", _reject_midpoint)
+
+        moments = [
+            Moment(
+                timestamp=50.0,
+                visual_context_goal="first",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+            Moment(
+                timestamp=350.0,
+                visual_context_goal="second",
+                textual_anchor="t",
+                downstream_utility="u",
+            ),
+        ]
+        transcript = [TranscriptSegment(start=0.0, end=600.0, text="long")]
+        cfg = DemoFilterConfig(
+            enabled=True,
+            gallery_min_words=0,
+            dedup_ssim_threshold=1.0,
+            phash_hamming_threshold=0,
+            max_seconds_between_keyframes=120.0,
+        )
+
+        results = demo_filter.select_frames_for_moments(
+            decoder=decoder,
+            moments=moments,
+            transcript=transcript,
+            config=cfg,
+            output_dir=tmp_path,
+        )
+
+        # Both real moments survive (they're derived from llm moments,
+        # not gap_fill), and the pipeline does not crash when a gap_fill
+        # candidate is rejected at a specific midpoint.
+        llm_sources = [r for r in results if r.moment_source == "llm"]
+        assert len(llm_sources) == 2

@@ -214,15 +214,20 @@ def _build_search_window(
     moment_ts: float,
     segment: TranscriptSegment,
     max_window_sec: float,
+    lookback_sec: float = 0.0,
 ) -> tuple[float, float]:
     """Compute the (start, end) timestamps for the forward-search window.
 
-    The window starts at the LLM's moment timestamp and ends at the earlier of:
-    - The end of the transcript segment the moment falls into.
-    - ``moment_ts + max_window_sec``.
+    The window is biased ``lookback_sec`` before ``moment_ts`` so frames
+    the speaker was referencing *before* naming an action are still in
+    range, and clamped to the containing transcript segment. Total
+    window width stays ``max_window_sec``.
     """
-    end = min(segment.end, moment_ts + max_window_sec)
-    return moment_ts, end
+    start = max(segment.start, moment_ts - lookback_sec)
+    end = min(segment.end, moment_ts + max_window_sec - lookback_sec)
+    if end < start:
+        end = start
+    return start, end
 
 
 def _is_stable(
@@ -325,6 +330,151 @@ def _pick_best_content_index(
     return best_idx
 
 
+def _pick_frame_for_moment(
+    decoder: VideoDecoder,
+    moment: Moment,
+    transcript: list[TranscriptSegment],
+    config: DemoFilterConfig,
+) -> tuple[np.ndarray, float, int] | None:
+    """Run the search-window + scoring + low-info gates for one moment.
+
+    Returns the (frame, timestamp, frame_number) of the picked frame, or
+    ``None`` if no transcript segment matches, no frames can be
+    extracted, or the picked frame fails the low-info gate. Dedup and
+    tail-skip are the caller's responsibility.
+    """
+    seg = _find_segment_for_timestamp(moment.timestamp, transcript)
+    if seg is None:
+        logger.warning(
+            "Moment at %.2fs ('%s') has no matching transcript segment, skipping",
+            moment.timestamp,
+            moment.visual_context_goal,
+        )
+        return None
+
+    win_start, win_end = _build_search_window(
+        moment_ts=moment.timestamp,
+        segment=seg,
+        max_window_sec=config.forward_search_window_max_sec,
+        lookback_sec=config.search_window_lookback_sec,
+    )
+    samples = _sample_window_frames(
+        decoder=decoder,
+        start=win_start,
+        end=win_end,
+        step=config.forward_search_step_sec,
+    )
+    if not samples:
+        logger.warning(
+            "No frames could be extracted for moment at %.2fs, skipping",
+            moment.timestamp,
+        )
+        return None
+
+    picked_idx = _pick_best_content_index(samples, config.gallery_ocr_min_dim)
+    picked_frame, picked_ts, picked_frame_num = samples[picked_idx]
+
+    if _is_low_info_frame(picked_frame, config):
+        logger.warning(
+            "Moment at %.2fs ('%s') picked a low-information frame "
+            "(gallery view or blank) — skipping.",
+            moment.timestamp,
+            moment.visual_context_goal,
+        )
+        return None
+
+    return picked_frame, picked_ts, picked_frame_num
+
+
+def _fill_coverage_gaps(
+    decoder: VideoDecoder,
+    results: list[FrameResult],
+    transcript: list[TranscriptSegment],
+    config: DemoFilterConfig,
+    output_dir: Path,
+) -> list[FrameResult]:
+    """Inject synthetic ``gap_fill`` frames wherever consecutive keyframes
+    are more than ``max_seconds_between_keyframes`` apart.
+
+    Walks the sorted results; when a gap exceeds the threshold, builds a
+    synthetic :class:`Moment` at the midpoint and pushes it through the
+    same selection + low-info gates as LLM picks. If the gap-fill frame
+    is rejected (low-info or no segment), the gap is accepted — forcing
+    a bad frame would defeat the point of the low-info gate. Iterates
+    until no gaps remain or the safety cap is hit.
+    """
+    if config.max_seconds_between_keyframes <= 0.0 or len(results) < 2:
+        return results
+
+    max_gap = config.max_seconds_between_keyframes
+    meta = decoder.get_metadata()
+    filled = list(results)
+    skip_midpoints: set[float] = set()
+
+    # Cap iterations to bound work. An 18-minute gap at max_gap=120 needs
+    # ~9 fills; 50 is comfortably above any realistic meeting.
+    for _ in range(50):
+        filled.sort(key=lambda r: r.video_timestamp or 0.0)
+        inserted = False
+        for i in range(len(filled) - 1):
+            prev_ts = filled[i].video_timestamp or 0.0
+            next_ts = filled[i + 1].video_timestamp or 0.0
+            gap = next_ts - prev_ts
+            if gap <= max_gap:
+                continue
+            midpoint = round((prev_ts + next_ts) / 2.0, 3)
+            if midpoint in skip_midpoints:
+                continue
+            synthetic = Moment(
+                timestamp=midpoint,
+                visual_context_goal="Coverage gap fill",
+                textual_anchor="",
+                downstream_utility=("Maintain temporal coverage between triggered moments."),
+                source="gap_fill",
+            )
+            picked = _pick_frame_for_moment(decoder, synthetic, transcript, config)
+            if picked is None:
+                skip_midpoints.add(midpoint)
+                logger.info(
+                    "Gap fill at %.2fs rejected or unavailable; accepting gap.",
+                    midpoint,
+                )
+                continue
+            picked_frame, picked_ts, picked_frame_num = picked
+            frame_id = f"demo_gapfill_{int(picked_ts * 1000):08d}ms"
+            asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
+            filled.append(
+                FrameResult(
+                    frame_id=frame_id,
+                    event_type=EventType.KEYFRAME,
+                    is_keyframe=True,
+                    perceptual_hash="",
+                    frame_width=picked_frame.shape[1],
+                    frame_height=picked_frame.shape[0],
+                    source_format="video",
+                    asset_path=str(asset_path),
+                    trigger_type="transcript_trigger",
+                    source_video=meta.filename,
+                    video_timestamp=picked_ts,
+                    video_frame_number=picked_frame_num,
+                    video_duration=meta.duration,
+                    visual_context_goal=synthetic.visual_context_goal,
+                    textual_anchor=synthetic.textual_anchor,
+                    downstream_utility=synthetic.downstream_utility,
+                    moment_source="gap_fill",
+                )
+            )
+            inserted = True
+            break
+        if not inserted:
+            break
+
+    filled.sort(key=lambda r: r.video_timestamp or 0.0)
+    for i, r in enumerate(filled, start=1):
+        r.keyframe_index = i
+    return filled
+
+
 def merge_moments(
     anchors: list[Moment],
     llm_picks: list[Moment],
@@ -393,44 +543,10 @@ def select_frames_for_moments(
             )
             continue
 
-        seg = _find_segment_for_timestamp(moment.timestamp, transcript)
-        if seg is None:
-            logger.warning(
-                "LLM moment at %.2fs ('%s') has no matching transcript segment, skipping",
-                moment.timestamp,
-                moment.visual_context_goal,
-            )
+        picked = _pick_frame_for_moment(decoder, moment, transcript, config)
+        if picked is None:
             continue
-
-        win_start, win_end = _build_search_window(
-            moment_ts=moment.timestamp,
-            segment=seg,
-            max_window_sec=config.forward_search_window_max_sec,
-        )
-        samples = _sample_window_frames(
-            decoder=decoder,
-            start=win_start,
-            end=win_end,
-            step=config.forward_search_step_sec,
-        )
-        if not samples:
-            logger.warning(
-                "No frames could be extracted for moment at %.2fs, skipping",
-                moment.timestamp,
-            )
-            continue
-
-        picked_idx = _pick_best_content_index(samples, config.gallery_ocr_min_dim)
-        picked_frame, picked_ts, picked_frame_num = samples[picked_idx]
-
-        if _is_low_info_frame(picked_frame, config):
-            logger.warning(
-                "Moment at %.2fs ('%s') picked a low-information frame "
-                "(gallery view or blank) — skipping.",
-                moment.timestamp,
-                moment.visual_context_goal,
-            )
-            continue
+        picked_frame, picked_ts, picked_frame_num = picked
 
         if not is_anchor and last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
             dedup_score = compare_frames(picked_frame, last_saved_frame).ssim_score
@@ -486,6 +602,8 @@ def select_frames_for_moments(
                 keyframe_index=idx,
             )
         )
+
+    results = _fill_coverage_gaps(decoder, results, transcript, config, output_dir)
 
     # Backfill total_keyframes
     for r in results:
