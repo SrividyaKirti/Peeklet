@@ -116,6 +116,99 @@ def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
     return len(_ocr_word_boxes(frame, downscale_dim))
 
 
+def _count_text_lines(boxes: list[WordBox]) -> int:
+    """Cluster word boxes by y-center into distinct text lines.
+
+    Uses a tolerance of half the median box height so a single typographic
+    row stays one line even when words have minor y jitter from Tesseract.
+    """
+    if not boxes:
+        return 0
+    median_h = float(np.median([b.h for b in boxes]))
+    tolerance = max(1.0, median_h / 2.0)
+    centers = sorted(b.y + b.h / 2.0 for b in boxes)
+    lines = 1
+    current = centers[0]
+    for c in centers[1:]:
+        if c - current > tolerance:
+            lines += 1
+            current = c
+    return lines
+
+
+_GRID_DIM = 8
+
+
+def _count_occupied_grid_cells(boxes: list[WordBox], frame_shape: tuple[int, ...]) -> int:
+    """Count distinct cells in an 8x8 grid that contain a word-box center.
+
+    Frame shape follows numpy convention (H, W, ...). Out-of-bounds centers
+    are clamped to the nearest edge cell so an OCR box that extends beyond
+    the downscaled frame still counts once.
+    """
+    if not boxes:
+        return 0
+    h, w = frame_shape[:2]
+    cell_h = max(1, h // _GRID_DIM)
+    cell_w = max(1, w // _GRID_DIM)
+    occupied: set[tuple[int, int]] = set()
+    for b in boxes:
+        cx = b.x + b.w / 2.0
+        cy = b.y + b.h / 2.0
+        col = min(_GRID_DIM - 1, max(0, int(cx // cell_w)))
+        row = min(_GRID_DIM - 1, max(0, int(cy // cell_h)))
+        occupied.add((row, col))
+    return len(occupied)
+
+
+_EDGE_MAGNITUDE_THRESHOLD = 30.0
+
+
+def _edge_pixel_ratio(frame: np.ndarray) -> float:
+    """Fraction of pixels whose |∂x|+|∂y| gradient exceeds a fixed threshold.
+
+    Uses ``np.gradient`` on the grayscale frame — numpy-only, no cv2
+    dependency. Gallery views (flat colored tiles) land near zero;
+    dashboard UIs with chrome sit well above 0.02.
+    """
+    if frame.ndim == 3:
+        gray = (0.2989 * frame[:, :, 0] + 0.5870 * frame[:, :, 1] + 0.1140 * frame[:, :, 2]).astype(
+            np.float32
+        )
+    else:
+        gray = frame.astype(np.float32)
+    gy, gx = np.gradient(gray)
+    mag = np.abs(gx) + np.abs(gy)
+    edge_pixels = int((mag > _EDGE_MAGNITUDE_THRESHOLD).sum())
+    total = gray.size
+    return edge_pixels / total if total else 0.0
+
+
+def _is_low_info_frame(frame: np.ndarray, config: DemoFilterConfig) -> bool:
+    """Composite low-information rejector (triple-AND).
+
+    Rejects a frame only if **all three** independent signals fall under
+    their thresholds. A legit minimalist UI will pass on at least one axis.
+    """
+    boxes = _ocr_word_boxes(frame, config.gallery_ocr_min_dim)
+    num_lines = _count_text_lines(boxes)
+    num_cells = _count_occupied_grid_cells(boxes, frame.shape)
+    edge_ratio = _edge_pixel_ratio(frame)
+    if edge_ratio >= config.min_edge_ratio:
+        return False
+    if num_lines >= config.min_text_lines:
+        return False
+    if num_cells >= config.min_grid_cells:
+        return False
+    logger.info(
+        "Low-info frame rejected: lines=%d cells=%d edge_ratio=%.4f",
+        num_lines,
+        num_cells,
+        edge_ratio,
+    )
+    return True
+
+
 def _build_search_window(
     moment_ts: float,
     segment: TranscriptSegment,

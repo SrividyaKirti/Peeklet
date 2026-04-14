@@ -1094,3 +1094,134 @@ class TestOcrWordBoxes:
         monkeypatch.setattr(demo_filter, "pytesseract", FakeTess)
         frame = np.zeros((100, 300, 3), dtype=np.uint8)
         assert demo_filter._count_words_in_frame(frame, downscale_dim=1000) == 3
+
+
+class TestCountTextLines:
+    def _box(self, y, h=10):
+        from peeklet.core.demo_filter import WordBox
+
+        return WordBox(text="x", conf=90.0, x=0, y=y, w=20, h=h)
+
+    def test_empty_returns_zero(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        assert _count_text_lines([]) == 0
+
+    def test_single_row_words_count_as_one_line(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        boxes = [self._box(y=10), self._box(y=12), self._box(y=11)]
+        assert _count_text_lines(boxes) == 1
+
+    def test_widely_separated_rows_count_separately(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        boxes = [self._box(y=10), self._box(y=100), self._box(y=200)]
+        assert _count_text_lines(boxes) == 3
+
+    def test_dense_ui_produces_many_lines(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        boxes = [self._box(y=20 * i) for i in range(20)]
+        assert _count_text_lines(boxes) == 20
+
+
+class TestCountOccupiedGridCells:
+    def _box(self, x, y, w=10, h=10):
+        from peeklet.core.demo_filter import WordBox
+
+        return WordBox(text="x", conf=90.0, x=x, y=y, w=w, h=h)
+
+    def test_empty_returns_zero(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        assert _count_occupied_grid_cells([], (800, 1280, 3)) == 0
+
+    def test_all_boxes_in_one_cell(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        boxes = [self._box(x=15, y=15), self._box(x=17, y=17)]
+        assert _count_occupied_grid_cells(boxes, (800, 1280, 3)) == 1
+
+    def test_dispersed_boxes_fill_many_cells(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        boxes = [self._box(x=100 * i + 50, y=80 * i + 40) for i in range(8)]
+        assert _count_occupied_grid_cells(boxes, (800, 1280, 3)) == 8
+
+    def test_handles_out_of_bounds_gracefully(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        boxes = [self._box(x=10_000, y=10_000)]
+        assert _count_occupied_grid_cells(boxes, (800, 1280, 3)) == 1
+
+
+class TestEdgePixelRatio:
+    def test_flat_frame_has_near_zero_edges(self):
+        from peeklet.core.demo_filter import _edge_pixel_ratio
+
+        frame = np.full((200, 200, 3), 128, dtype=np.uint8)
+        assert _edge_pixel_ratio(frame) < 0.001
+
+    def test_high_contrast_checkerboard_has_many_edges(self):
+        from peeklet.core.demo_filter import _edge_pixel_ratio
+
+        frame = np.zeros((200, 200, 3), dtype=np.uint8)
+        for i in range(10):
+            for j in range(10):
+                if (i + j) % 2 == 0:
+                    frame[i * 20 : (i + 1) * 20, j * 20 : (j + 1) * 20] = 255
+        assert _edge_pixel_ratio(frame) > 0.05
+
+    def test_grayscale_input_supported(self):
+        from peeklet.core.demo_filter import _edge_pixel_ratio
+
+        frame = np.zeros((100, 100), dtype=np.uint8)
+        assert _edge_pixel_ratio(frame) == 0.0
+
+
+class TestIsLowInfoFrame:
+    def _cfg(self, **overrides):
+        from peeklet.config import DemoFilterConfig
+
+        return DemoFilterConfig(**overrides)
+
+    def test_rejects_when_all_three_signals_fail(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 3)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 4)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is True
+
+    def test_passes_when_only_text_lines_pass(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 20)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 4)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
+
+    def test_passes_when_only_edge_density_passes(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 3)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 4)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.05)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
+
+    def test_passes_when_only_grid_cells_pass(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 3)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 20)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
