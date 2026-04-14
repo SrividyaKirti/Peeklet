@@ -164,7 +164,7 @@ def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
         if current_start is None:
             continue  # skip frontmatter before the first timestamp
         stripped = line.strip()
-        if stripped:
+        if stripped and (not current_lines or current_lines[-1] != stripped):
             current_lines.append(stripped)
 
     if current_start is not None and current_lines:

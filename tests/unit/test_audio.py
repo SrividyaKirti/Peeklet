@@ -147,6 +147,40 @@ class TestParseFathomMd:
         assert segments[0].start == 0.0
         assert "ACTION ITEM" in segments[0].text
 
+    def test_duplicate_action_item_line_dedup(self, tmp_path: Path) -> None:
+        # Fathom emits the same ACTION ITEM line twice on consecutive lines
+        # inside a speech segment. Accumulated verbatim this duplicates the
+        # anchor text in the joined segment content.
+        md = tmp_path / "test.md"
+        action_line = (
+            "**ACTION ITEM: Add Tasks link - "
+            "++[WATCH](https://fathom.video/calls/1?timestamp=133.99)++**  \n"
+        )
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Preamble speech.  \n" + action_line + action_line + "\n"
+            "++[@0:10](https://fathom.video/calls/1?timestamp=10.0)++ - **Bob**  \n"
+            "Next.  \n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].text.count("ACTION ITEM: Add Tasks link") == 1
+
+    def test_consecutive_duplicate_lines_collapsed(self, tmp_path: Path) -> None:
+        # Any consecutive identical non-empty line is collapsed — Fathom
+        # frequently emits duplicate anchor lines, and legitimate prose
+        # doesn't repeat verbatim across line breaks.
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Same sentence here.  \n"
+            "Same sentence here.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 1
+        assert segments[0].text == "Same sentence here."
+
     def test_speaker_extracted(self, tmp_path: Path) -> None:
         md = tmp_path / "test.md"
         md.write_text(
