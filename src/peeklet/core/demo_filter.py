@@ -17,6 +17,7 @@ import numpy as np
 
 from peeklet.core.exporter import save_keyframe
 from peeklet.core.llm import build_llm_client
+from peeklet.utils.image import dhash_64, hamming_distance
 from peeklet.utils.types import EventType, FrameResult, Moment
 
 if TYPE_CHECKING:
@@ -372,6 +373,7 @@ def select_frames_for_moments(
     meta = decoder.get_metadata()
     results: list[FrameResult] = []
     last_saved_frame: np.ndarray | None = None
+    last_saved_phash: int | None = None
 
     tail_cutoff: float | None = None
     if config.tail_skip_ratio > 0.0 and meta.duration > 0.0:
@@ -443,9 +445,24 @@ def select_frames_for_moments(
                 )
                 continue
 
+        if not is_anchor and last_saved_phash is not None:
+            current_phash = dhash_64(picked_frame)
+            dist = hamming_distance(current_phash, last_saved_phash)
+            if dist <= config.phash_hamming_threshold:
+                logger.info(
+                    "Moment at %.2fs ('%s') pHash duplicate of previous keyframe "
+                    "(hamming=%d <= %d), skipping.",
+                    moment.timestamp,
+                    moment.visual_context_goal,
+                    dist,
+                    config.phash_hamming_threshold,
+                )
+                continue
+
         frame_id = f"demo_{idx:04d}_{int(picked_ts * 1000):08d}ms"
         asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
         last_saved_frame = picked_frame
+        last_saved_phash = dhash_64(picked_frame)
 
         results.append(
             FrameResult(

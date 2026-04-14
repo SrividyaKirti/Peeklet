@@ -25,10 +25,23 @@ def _pass_layout_rejector_by_default(request, monkeypatch):
         return
     if "test_select_frames_for_moments_drops_gallery_frames" in request.node.nodeid:
         return
+    if "TestPhashDedup" in request.node.nodeid:
+        return
     monkeypatch.setattr(
         "peeklet.core.demo_filter._is_low_info_frame",
         lambda frame, config: False,
     )
+    # Flat-colored synthetic frames all dHash to 0 under the real algorithm,
+    # which would trip pHash dedup for every pair. Hand out a random 64-bit
+    # hash per call so integration tests exercise the SSIM dedup path cleanly
+    # (two random 64-bit ints are ~32 bits apart, well above the dedup
+    # threshold of 5).
+    import os
+
+    def _unique_hash(_frame):
+        return int.from_bytes(os.urandom(8), "big")
+
+    monkeypatch.setattr("peeklet.core.demo_filter.dhash_64", _unique_hash)
 
 
 def _make_frame(h: int = 360, w: int = 360) -> np.ndarray:
@@ -1241,3 +1254,115 @@ class TestIsLowInfoFrame:
         monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
+
+
+class _StubSsim:
+    def __init__(self, score):
+        self.ssim_score = score
+
+
+class TestPhashDedup:
+    def _decoder(self):
+        class FakeDecoder:
+            def get_metadata(self):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    filename="fake.mp4",
+                    duration=60.0,
+                    frame_count=1800,
+                    fps=30.0,
+                )
+
+            def extract_frame_at(self, ts):
+                return np.zeros((100, 100, 3), dtype=np.uint8), ts, int(ts * 30)
+
+        return FakeDecoder()
+
+    def test_phash_duplicate_is_dropped(self, tmp_path, monkeypatch):
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        monkeypatch.setattr("peeklet.core.comparator.compare_frames", lambda a, b: _StubSsim(0.0))
+        monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0xABCD1234)
+        monkeypatch.setattr(demo_filter, "hamming_distance", lambda a, b: 0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+
+        moments = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="first",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+            Moment(
+                timestamp=20.0,
+                visual_context_goal="duplicate",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+        ]
+        transcript = [
+            TranscriptSegment(start=9.0, end=25.0, text="x", speaker=None),
+        ]
+        results = demo_filter.select_frames_for_moments(
+            decoder=self._decoder(),
+            moments=moments,
+            transcript=transcript,
+            config=DemoFilterConfig(),
+            output_dir=tmp_path,
+        )
+        assert len(results) == 1
+
+    def test_anchor_bypasses_phash_dedup(self, tmp_path, monkeypatch):
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        monkeypatch.setattr("peeklet.core.comparator.compare_frames", lambda a, b: _StubSsim(0.0))
+        monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0xABCD1234)
+        monkeypatch.setattr(demo_filter, "hamming_distance", lambda a, b: 0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+
+        moments = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="first",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+            Moment(
+                timestamp=20.0,
+                visual_context_goal="second anchor",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+        ]
+        transcript = [
+            TranscriptSegment(start=9.0, end=25.0, text="x", speaker=None),
+        ]
+        results = demo_filter.select_frames_for_moments(
+            decoder=self._decoder(),
+            moments=moments,
+            transcript=transcript,
+            config=DemoFilterConfig(),
+            output_dir=tmp_path,
+        )
+        assert len(results) == 2
