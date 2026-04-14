@@ -70,11 +70,18 @@ def test_demo_mode_end_to_end_with_fake_llm(
     )
     # Ensure pytesseract is seen as available (demo mode requires it).
     monkeypatch.setattr(df_module, "pytesseract", MagicMock())
-    monkeypatch.setattr(
-        df_module,
-        "_count_words_in_frame",
-        lambda frame, downscale_dim: 10,
-    )
+    # Synthetic 64x64 frames would fail the layout rejector; bypass it for
+    # the integration test so we're exercising the real pipeline wiring.
+    monkeypatch.setattr(df_module, "_is_low_info_frame", lambda frame, config: False)
+    # Two synthetic frames produce the same dHash, which would trip pHash
+    # dedup. Hand out distinct hashes per call so both moments survive.
+    _counter = {"n": 0}
+
+    def _unique_hash(_frame):
+        _counter["n"] += 1
+        return _counter["n"] * 0x0123456789ABCDEF & 0xFFFFFFFFFFFFFFFF
+
+    monkeypatch.setattr(df_module, "dhash_64", _unique_hash)
 
     results = process_video(video_path, cfg)
 

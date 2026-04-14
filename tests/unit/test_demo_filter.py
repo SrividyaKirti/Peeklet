@@ -8,6 +8,42 @@ import numpy as np
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _pass_layout_rejector_by_default(request, monkeypatch):
+    """Default: let the layout rejector pass every frame.
+
+    Integration tests feed synthetic flat-colored frames through
+    ``select_frames_for_moments``; the real layout rejector would drop
+    all of them because they have zero edge density and zero OCR text.
+    Tests that specifically exercise the rejector live in
+    ``TestIsLowInfoFrame`` (patches the signals directly) or are marked
+    ``rejector_live``.
+    """
+    if "TestIsLowInfoFrame" in request.node.nodeid:
+        return
+    if "test_low_info_rejector_accepts_real_text_frame" in request.node.nodeid:
+        return
+    if "test_select_frames_for_moments_drops_gallery_frames" in request.node.nodeid:
+        return
+    if "TestPhashDedup" in request.node.nodeid:
+        return
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._is_low_info_frame",
+        lambda frame, config: False,
+    )
+    # Flat-colored synthetic frames all dHash to 0 under the real algorithm,
+    # which would trip pHash dedup for every pair. Hand out a random 64-bit
+    # hash per call so integration tests exercise the SSIM dedup path cleanly
+    # (two random 64-bit ints are ~32 bits apart, well above the dedup
+    # threshold of 5).
+    import os
+
+    def _unique_hash(_frame):
+        return int.from_bytes(os.urandom(8), "big")
+
+    monkeypatch.setattr("peeklet.core.demo_filter.dhash_64", _unique_hash)
+
+
 def _make_frame(h: int = 360, w: int = 360) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -172,20 +208,8 @@ def test_is_stable_fails_when_one_neighbor_differs():
     assert _is_stable(frame, prev, nxt, threshold=0.92) is False
 
 
-def test_is_gallery_frame_returns_true_below_threshold():
-    from peeklet.core.demo_filter import _is_gallery_frame
-
-    frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=2):
-        assert _is_gallery_frame(frame, downscale_dim=360, min_words=5) is True
-
-
-def test_is_gallery_frame_returns_false_above_threshold():
-    from peeklet.core.demo_filter import _is_gallery_frame
-
-    frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=10):
-        assert _is_gallery_frame(frame, downscale_dim=360, min_words=5) is False
+# Word-count-gate gallery tests removed: behavior replaced by the triple-AND
+# layout rejector (see TestIsLowInfoFrame).
 
 
 def _make_decoder_for_moments(meta_duration: float = 60.0):
@@ -275,8 +299,8 @@ def test_select_frames_for_moments_drops_gallery_frames(tmp_path, monkeypatch):
     cfg = DemoFilterConfig(enabled=True, gallery_min_words=5)
 
     monkeypatch.setattr(
-        "peeklet.core.demo_filter._count_words_in_frame",
-        lambda frame, downscale_dim: 0,
+        "peeklet.core.demo_filter._is_low_info_frame",
+        lambda frame, config: True,
     )
     monkeypatch.setattr(
         "peeklet.core.demo_filter.save_keyframe",
@@ -421,30 +445,35 @@ def test_demo_filter_config_has_gallery_ocr_min_dim_default_at_least_1280():
 
 
 @pytest.mark.skipif(not _tesseract_available(), reason="tesseract binary not installed")
-def test_is_gallery_frame_accepts_real_text_frame_at_720p():
-    """Bug 3 regression: a 720p frame with clearly readable text must NOT be
-    flagged as gallery view at the default ``gallery_ocr_min_dim``.
-
-    This is the end-to-end OCR test that would have caught the silent rejection
-    of every demo frame from a 720p screen-share recording.
+def test_low_info_rejector_accepts_real_text_frame_at_720p():
+    """Regression: a 720p frame with dashboard-density text must NOT be
+    rejected as low-info at the default config thresholds. Guards against
+    the OCR downscale regression that previously dropped every demo frame
+    from a 720p screen-share recording.
     """
     from peeklet.config import DemoFilterConfig
-    from peeklet.core.demo_filter import _is_gallery_frame
+    from peeklet.core.demo_filter import _is_low_info_frame
 
-    frame = _render_text_frame(
-        ["Settings", "Dashboard", "Analytics", "Users", "Tokens", "Reports", "Logout"],
-        width=1280,
-        height=720,
-    )
+    # Dashboard-like content: many words across rows and columns so that
+    # both text-line count and grid-cell dispersion clear thresholds, plus
+    # enough text edges that edge density also clears.
+    dashboard_rows = [
+        "Settings Dashboard Analytics Users Reports Logout",
+        "Home Billing Notifications Search Support Help",
+        "Active Inactive Pending Archived Draft Published",
+        "Create Edit Delete Import Export Refresh",
+        "Name Email Role Status Updated Created",
+        "Policy Tool Insights Logs Models Cost",
+        "January February March April May June",
+        "Monday Tuesday Wednesday Thursday Friday Saturday",
+        "Alpha Beta Gamma Delta Epsilon Zeta",
+        "North South East West Center Outer",
+        "Red Green Blue Yellow Purple Orange",
+        "Low Medium High Critical Severe Blocker",
+    ]
+    frame = _render_text_frame(dashboard_rows, width=1280, height=720)
     cfg = DemoFilterConfig()
-    assert (
-        _is_gallery_frame(
-            frame,
-            downscale_dim=cfg.gallery_ocr_min_dim,
-            min_words=cfg.gallery_min_words,
-        )
-        is False
-    )
+    assert _is_low_info_frame(frame, cfg) is False
 
 
 def test_apply_demo_filter_raises_when_pytesseract_unavailable(tmp_path, monkeypatch):
@@ -1030,3 +1059,310 @@ class TestPickBestContentIndex:
         with patch("peeklet.core.demo_filter._count_words_in_frame", return_value=5):
             idx = _pick_best_content_index(samples, downscale_dim=1920)
         assert idx == 0
+
+
+class TestOcrWordBoxes:
+    def test_returns_empty_when_pytesseract_missing(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "pytesseract", None)
+        result = demo_filter._ocr_word_boxes(
+            np.zeros((10, 10, 3), dtype=np.uint8), downscale_dim=100
+        )
+        assert result == []
+
+    def test_filters_low_confidence_and_short_words(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        fake_data = {
+            "text": ["hello", "x", "world", "noise"],
+            "conf": ["90", "80", "85", "10"],
+            "left": [10, 50, 100, 200],
+            "top": [5, 5, 5, 5],
+            "width": [40, 5, 45, 30],
+            "height": [12, 12, 12, 12],
+        }
+
+        class FakeTess:
+            class Output:
+                DICT = "dict"
+
+            @staticmethod
+            def image_to_data(img, output_type):
+                return fake_data
+
+        monkeypatch.setattr(demo_filter, "pytesseract", FakeTess)
+        boxes = demo_filter._ocr_word_boxes(
+            np.zeros((100, 300, 3), dtype=np.uint8), downscale_dim=1000
+        )
+        texts = [b.text for b in boxes]
+        assert texts == ["hello", "world"]
+        assert boxes[0].x == 10 and boxes[0].y == 5
+        assert boxes[0].w == 40 and boxes[0].h == 12
+
+    def test_count_words_still_reflects_box_count(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        fake_data = {
+            "text": ["aa", "bb", "cc"],
+            "conf": ["90", "90", "90"],
+            "left": [0, 10, 20],
+            "top": [0, 0, 0],
+            "width": [5, 5, 5],
+            "height": [10, 10, 10],
+        }
+
+        class FakeTess:
+            class Output:
+                DICT = "dict"
+
+            @staticmethod
+            def image_to_data(img, output_type):
+                return fake_data
+
+        monkeypatch.setattr(demo_filter, "pytesseract", FakeTess)
+        frame = np.zeros((100, 300, 3), dtype=np.uint8)
+        assert demo_filter._count_words_in_frame(frame, downscale_dim=1000) == 3
+
+
+class TestCountTextLines:
+    def _box(self, y, h=10):
+        from peeklet.core.demo_filter import WordBox
+
+        return WordBox(text="x", conf=90.0, x=0, y=y, w=20, h=h)
+
+    def test_empty_returns_zero(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        assert _count_text_lines([]) == 0
+
+    def test_single_row_words_count_as_one_line(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        boxes = [self._box(y=10), self._box(y=12), self._box(y=11)]
+        assert _count_text_lines(boxes) == 1
+
+    def test_widely_separated_rows_count_separately(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        boxes = [self._box(y=10), self._box(y=100), self._box(y=200)]
+        assert _count_text_lines(boxes) == 3
+
+    def test_dense_ui_produces_many_lines(self):
+        from peeklet.core.demo_filter import _count_text_lines
+
+        boxes = [self._box(y=20 * i) for i in range(20)]
+        assert _count_text_lines(boxes) == 20
+
+
+class TestCountOccupiedGridCells:
+    def _box(self, x, y, w=10, h=10):
+        from peeklet.core.demo_filter import WordBox
+
+        return WordBox(text="x", conf=90.0, x=x, y=y, w=w, h=h)
+
+    def test_empty_returns_zero(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        assert _count_occupied_grid_cells([], (800, 1280, 3)) == 0
+
+    def test_all_boxes_in_one_cell(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        boxes = [self._box(x=15, y=15), self._box(x=17, y=17)]
+        assert _count_occupied_grid_cells(boxes, (800, 1280, 3)) == 1
+
+    def test_dispersed_boxes_fill_many_cells(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        boxes = [self._box(x=100 * i + 50, y=80 * i + 40) for i in range(8)]
+        assert _count_occupied_grid_cells(boxes, (800, 1280, 3)) == 8
+
+    def test_handles_out_of_bounds_gracefully(self):
+        from peeklet.core.demo_filter import _count_occupied_grid_cells
+
+        boxes = [self._box(x=10_000, y=10_000)]
+        assert _count_occupied_grid_cells(boxes, (800, 1280, 3)) == 1
+
+
+class TestEdgePixelRatio:
+    def test_flat_frame_has_near_zero_edges(self):
+        from peeklet.core.demo_filter import _edge_pixel_ratio
+
+        frame = np.full((200, 200, 3), 128, dtype=np.uint8)
+        assert _edge_pixel_ratio(frame) < 0.001
+
+    def test_high_contrast_checkerboard_has_many_edges(self):
+        from peeklet.core.demo_filter import _edge_pixel_ratio
+
+        frame = np.zeros((200, 200, 3), dtype=np.uint8)
+        for i in range(10):
+            for j in range(10):
+                if (i + j) % 2 == 0:
+                    frame[i * 20 : (i + 1) * 20, j * 20 : (j + 1) * 20] = 255
+        assert _edge_pixel_ratio(frame) > 0.05
+
+    def test_grayscale_input_supported(self):
+        from peeklet.core.demo_filter import _edge_pixel_ratio
+
+        frame = np.zeros((100, 100), dtype=np.uint8)
+        assert _edge_pixel_ratio(frame) == 0.0
+
+
+class TestIsLowInfoFrame:
+    def _cfg(self, **overrides):
+        from peeklet.config import DemoFilterConfig
+
+        return DemoFilterConfig(**overrides)
+
+    def test_rejects_when_all_three_signals_fail(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 3)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 4)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is True
+
+    def test_passes_when_only_text_lines_pass(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 20)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 4)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
+
+    def test_passes_when_only_edge_density_passes(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 3)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 4)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.05)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
+
+    def test_passes_when_only_grid_cells_pass(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_ocr_word_boxes", lambda *a, **kw: [])
+        monkeypatch.setattr(demo_filter, "_count_text_lines", lambda boxes: 3)
+        monkeypatch.setattr(demo_filter, "_count_occupied_grid_cells", lambda boxes, shape: 20)
+        monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
+
+
+class _StubSsim:
+    def __init__(self, score):
+        self.ssim_score = score
+
+
+class TestPhashDedup:
+    def _decoder(self):
+        class FakeDecoder:
+            def get_metadata(self):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    filename="fake.mp4",
+                    duration=60.0,
+                    frame_count=1800,
+                    fps=30.0,
+                )
+
+            def extract_frame_at(self, ts):
+                return np.zeros((100, 100, 3), dtype=np.uint8), ts, int(ts * 30)
+
+        return FakeDecoder()
+
+    def test_phash_duplicate_is_dropped(self, tmp_path, monkeypatch):
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        monkeypatch.setattr("peeklet.core.comparator.compare_frames", lambda a, b: _StubSsim(0.0))
+        monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0xABCD1234)
+        monkeypatch.setattr(demo_filter, "hamming_distance", lambda a, b: 0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+
+        moments = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="first",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+            Moment(
+                timestamp=20.0,
+                visual_context_goal="duplicate",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+        ]
+        transcript = [
+            TranscriptSegment(start=9.0, end=25.0, text="x", speaker=None),
+        ]
+        results = demo_filter.select_frames_for_moments(
+            decoder=self._decoder(),
+            moments=moments,
+            transcript=transcript,
+            config=DemoFilterConfig(),
+            output_dir=tmp_path,
+        )
+        assert len(results) == 1
+
+    def test_anchor_bypasses_phash_dedup(self, tmp_path, monkeypatch):
+        from peeklet.config import DemoFilterConfig
+        from peeklet.core import demo_filter
+        from peeklet.core.audio import TranscriptSegment
+        from peeklet.utils.types import Moment
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        monkeypatch.setattr("peeklet.core.comparator.compare_frames", lambda a, b: _StubSsim(0.0))
+        monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0xABCD1234)
+        monkeypatch.setattr(demo_filter, "hamming_distance", lambda a, b: 0)
+        monkeypatch.setattr(
+            demo_filter,
+            "save_keyframe",
+            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+        )
+
+        moments = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="first",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+            Moment(
+                timestamp=20.0,
+                visual_context_goal="second anchor",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+        ]
+        transcript = [
+            TranscriptSegment(start=9.0, end=25.0, text="x", speaker=None),
+        ]
+        results = demo_filter.select_frames_for_moments(
+            decoder=self._decoder(),
+            moments=moments,
+            transcript=transcript,
+            config=DemoFilterConfig(),
+            output_dir=tmp_path,
+        )
+        assert len(results) == 2

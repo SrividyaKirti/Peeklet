@@ -272,3 +272,26 @@ class TestSensitivityPresets:
         config = PeekletConfig()
         with pytest.raises(ValueError, match="unknown sensitivity preset"):
             apply_sensitivity_preset(config, "extreme")
+
+
+class TestDemoFilterLayoutConfig:
+    def test_defaults(self) -> None:
+        from peeklet.config import DemoFilterConfig
+
+        cfg = DemoFilterConfig()
+        assert cfg.min_text_lines == 10
+        assert cfg.min_grid_cells == 12
+        assert cfg.min_edge_ratio == 0.015
+        assert cfg.phash_hamming_threshold == 5
+
+    def test_thresholds_validated(self) -> None:
+        from peeklet.config import DemoFilterConfig
+
+        with pytest.raises(ValidationError):
+            DemoFilterConfig(min_text_lines=-1)
+        with pytest.raises(ValidationError):
+            DemoFilterConfig(min_edge_ratio=-0.1)
+        with pytest.raises(ValidationError):
+            DemoFilterConfig(phash_hamming_threshold=-1)
+        with pytest.raises(ValidationError):
+            DemoFilterConfig(phash_hamming_threshold=65)

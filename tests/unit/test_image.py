@@ -3,7 +3,13 @@
 import numpy as np
 import pytest
 
-from peeklet.utils.image import compute_block_grid, crop_region, ensure_rgb_uint8
+from peeklet.utils.image import (
+    compute_block_grid,
+    crop_region,
+    dhash_64,
+    ensure_rgb_uint8,
+    hamming_distance,
+)
 from peeklet.utils.types import Region
 
 
@@ -72,3 +78,36 @@ class TestComputeBlockGrid:
         rows, cols = compute_block_grid(16, 16, block_size=32)
         assert rows == 0
         assert cols == 0
+
+
+class TestDhash64:
+    def test_identical_frames_produce_identical_hash(self) -> None:
+        frame = np.random.default_rng(0).integers(0, 256, size=(100, 100, 3), dtype=np.uint8)
+        assert dhash_64(frame) == dhash_64(frame.copy())
+
+    def test_different_frames_produce_different_hash(self) -> None:
+        rng = np.random.default_rng(0)
+        a = rng.integers(0, 256, size=(100, 100, 3), dtype=np.uint8)
+        b = rng.integers(0, 256, size=(100, 100, 3), dtype=np.uint8)
+        assert dhash_64(a) != dhash_64(b)
+
+    def test_hash_is_64_bit_integer(self) -> None:
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        h = dhash_64(frame)
+        assert isinstance(h, int)
+        assert 0 <= h < (1 << 64)
+
+    def test_handles_grayscale_input(self) -> None:
+        frame = np.zeros((50, 50), dtype=np.uint8)
+        assert dhash_64(frame) == 0  # uniform frame → all zero diffs
+
+
+class TestHammingDistance:
+    def test_identical_hashes_distance_zero(self) -> None:
+        assert hamming_distance(0xDEADBEEF, 0xDEADBEEF) == 0
+
+    def test_single_bit_flip(self) -> None:
+        assert hamming_distance(0b1010, 0b1011) == 1
+
+    def test_fully_different(self) -> None:
+        assert hamming_distance(0, 0xFFFFFFFFFFFFFFFF) == 64

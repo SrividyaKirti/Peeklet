@@ -120,6 +120,19 @@ class DemoFilterConfig(BaseModel):
     # tokens and picks a wrap-up frame with no meaningful content. 0.0
     # disables the tail skip entirely.
     tail_skip_ratio: float = Field(default=0.02, ge=0.0, le=0.5)
+    # --- Layout-based low-info rejector (PR A) ---
+    # Replaces the raw word-count gate. A frame is rejected only if ALL three
+    # signals below fall under their thresholds (triple-AND), so a legit
+    # minimalist-but-valid UI passes on at least one axis while gallery views
+    # and blank scratch pages get caught.
+    min_text_lines: int = Field(default=10, ge=0)
+    min_grid_cells: int = Field(default=12, ge=0)
+    min_edge_ratio: float = Field(default=0.015, ge=0.0, le=1.0)
+    # Post-selection perceptual-hash dedup. A newly picked frame is dropped
+    # if its 64-bit dHash Hamming distance to the most recently saved keyframe
+    # is <= this value. 0 means exact-match only; 64 disables dedup. Runs
+    # after dedup_ssim_threshold as a backstop for near-duplicates SSIM missed.
+    phash_hamming_threshold: int = Field(default=5, ge=0, le=64)
 
 
 class PeekletConfig(BaseModel):
