@@ -413,3 +413,48 @@ class TestWriteContextMarkdown:
 
         md = out_path.read_text()
         assert "Screenshot 1" in md
+
+
+def test_context_json_has_schema_version():
+    from peeklet.core.context_exporter import build_context
+
+    ctx = build_context(
+        filename="foo.mp4",
+        duration_s=100.0,
+        results=[],
+        segments=[],
+    )
+    assert ctx.get("schema_version") == 2
+
+
+def test_merged_anchors_render_in_screenshot_entry():
+    from peeklet.core.context_exporter import build_context
+    from peeklet.utils.types import AnchorRef, EventType, FrameResult
+
+    fr = FrameResult(
+        frame_id="demo_0001",
+        event_type=EventType.KEYFRAME,
+        is_keyframe=True,
+        perceptual_hash="",
+        frame_width=100,
+        frame_height=100,
+        video_timestamp=10.0,
+        visual_context_goal="dashboard",
+        moment_source="llm",
+        asset_path="demo_0001.jpg",
+    )
+    fr.anchors.append(
+        AnchorRef(
+            timestamp=12.5,
+            visual_context_goal="action item: update dashboard",
+            textual_anchor="We'll update the dashboard by Friday.",
+        )
+    )
+    ctx = build_context(filename="foo.mp4", duration_s=100.0, results=[fr], segments=[])
+    assert ctx["screenshots"][0]["merged_anchors"] == [
+        {
+            "timestamp_s": 12.5,
+            "visual_context_goal": "action item: update dashboard",
+            "textual_anchor": "We'll update the dashboard by Friday.",
+        }
+    ]

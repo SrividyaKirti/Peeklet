@@ -214,3 +214,41 @@ def test_frame_result_demo_fields_default_none():
     assert r.textual_anchor is None
     assert r.downstream_utility is None
     assert r.moment_source is None
+
+
+def test_frame_result_anchors_field_defaults_to_empty_list():
+    from peeklet.utils.types import AnchorRef, EventType, FrameResult
+
+    fr = FrameResult(
+        frame_id="demo_0001",
+        event_type=EventType.KEYFRAME,
+        is_keyframe=True,
+        perceptual_hash="",
+        frame_width=100,
+        frame_height=100,
+    )
+    assert fr.anchors == []
+    fr.anchors.append(
+        AnchorRef(
+            timestamp=12.5,
+            visual_context_goal="dashboard",
+            textual_anchor="the dashboard shows...",
+        )
+    )
+    assert len(fr.anchors) == 1
+    assert fr.anchors[0].timestamp == 12.5
+
+
+def test_frame_result_alignment_confidence_accepts_unknown():
+    from peeklet.utils.types import EventType, FrameResult
+
+    fr = FrameResult(
+        frame_id="demo_0001",
+        event_type=EventType.KEYFRAME,
+        is_keyframe=True,
+        perceptual_hash="",
+        frame_width=100,
+        frame_height=100,
+        alignment_confidence="unknown",
+    )
+    assert fr.alignment_confidence == "unknown"

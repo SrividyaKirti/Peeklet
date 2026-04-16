@@ -180,7 +180,7 @@ def test_demo_filter_config_defaults():
     assert cfg.demo_filter.ssim_stability_threshold == 0.92
     assert cfg.demo_filter.forward_search_step_sec == 0.5
     assert cfg.demo_filter.forward_search_window_max_sec == 10.0
-    assert cfg.demo_filter.gallery_min_words == 5
+    assert cfg.demo_filter.gallery_ocr_min_dim == 1920
 
 
 def test_demo_filter_config_rejects_unknown_provider():
@@ -282,7 +282,7 @@ class TestDemoFilterLayoutConfig:
         assert cfg.min_text_lines == 10
         assert cfg.min_grid_cells == 12
         assert cfg.min_edge_ratio == 0.015
-        assert cfg.phash_hamming_threshold == 5
+        assert cfg.dhash_hamming_threshold == 5
 
     def test_thresholds_validated(self) -> None:
         from peeklet.config import DemoFilterConfig
@@ -292,6 +292,29 @@ class TestDemoFilterLayoutConfig:
         with pytest.raises(ValidationError):
             DemoFilterConfig(min_edge_ratio=-0.1)
         with pytest.raises(ValidationError):
-            DemoFilterConfig(phash_hamming_threshold=-1)
+            DemoFilterConfig(dhash_hamming_threshold=-1)
         with pytest.raises(ValidationError):
-            DemoFilterConfig(phash_hamming_threshold=65)
+            DemoFilterConfig(dhash_hamming_threshold=65)
+
+
+def test_demo_filter_has_dedup_jaccard_defaults():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.dedup_jaccard_threshold == 0.95
+    assert cfg.min_ocr_tokens_for_jaccard == 5
+
+
+def test_dhash_hamming_threshold_uses_new_name():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig(dhash_hamming_threshold=3)
+    assert cfg.dhash_hamming_threshold == 3
+    assert not hasattr(cfg, "phash_hamming_threshold")
+
+
+def test_phash_alias_migrates_legacy_config():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig.model_validate({"phash_hamming_threshold": 7})
+    assert cfg.dhash_hamming_threshold == 7

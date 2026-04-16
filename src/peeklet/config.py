@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PipelineConfig(BaseModel):
@@ -99,8 +99,6 @@ class DemoFilterConfig(BaseModel):
     ssim_stability_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     forward_search_step_sec: float = Field(default=0.5, gt=0.0)
     forward_search_window_max_sec: float = Field(default=10.0, gt=0.0)
-    # Gallery detection (reuses _count_words_in_frame)
-    gallery_min_words: int = Field(default=5, ge=0)
     # Minimum longest-edge resolution for OCR. Frames are downscaled only if
     # they exceed this value, so OCR runs at near-source resolution. Reusing
     # ``frame_search_resolution`` (which can be 240–540 under quality presets)
@@ -128,11 +126,34 @@ class DemoFilterConfig(BaseModel):
     min_text_lines: int = Field(default=10, ge=0)
     min_grid_cells: int = Field(default=12, ge=0)
     min_edge_ratio: float = Field(default=0.015, ge=0.0, le=1.0)
-    # Post-selection perceptual-hash dedup. A newly picked frame is dropped
-    # if its 64-bit dHash Hamming distance to the most recently saved keyframe
-    # is <= this value. 0 means exact-match only; 64 disables dedup. Runs
-    # after dedup_ssim_threshold as a backstop for near-duplicates SSIM missed.
-    phash_hamming_threshold: int = Field(default=5, ge=0, le=64)
+    # Post-selection dHash dedup. A newly picked frame is dropped if its
+    # 64-bit dHash Hamming distance to the most recently saved keyframe is <=
+    # this value. 0 means exact-match only; 64 disables dedup. Runs after
+    # dedup_ssim_threshold as a backstop for near-duplicates SSIM missed.
+    dhash_hamming_threshold: int = Field(default=5, ge=0, le=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_phash_alias(cls, data):
+        if (
+            isinstance(data, dict)
+            and "phash_hamming_threshold" in data
+            and "dhash_hamming_threshold" not in data
+        ):
+            data["dhash_hamming_threshold"] = data.pop("phash_hamming_threshold")
+        return data
+
+    # Primary dedup signal — Jaccard of normalized OCR token sets.
+    # Screen-share recordings have stable text but pixel-level noise, so
+    # token overlap is a more faithful "same screen" signal than SSIM or
+    # dHash on raw pixels. Only applied when both frames have enough
+    # tokens (see min_ocr_tokens_for_jaccard); otherwise dHash is the
+    # fallback. 1.0 disables Jaccard dedup.
+    dedup_jaccard_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
+    # Minimum tokens in both frames for Jaccard to be trustworthy. Below
+    # this, fall back to dHash. Prevents spurious "identical" matches on
+    # photo/video frames where OCR returns nothing.
+    min_ocr_tokens_for_jaccard: int = Field(default=5, ge=0)
     # --- Coverage gap closer (PR C) ---
     # Maximum allowed gap between consecutive kept keyframes, in seconds.
     # When a longer gap is detected after frame selection, a synthetic

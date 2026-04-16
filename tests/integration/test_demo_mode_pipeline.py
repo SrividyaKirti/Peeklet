@@ -46,7 +46,6 @@ def test_demo_mode_end_to_end_with_fake_llm(
     cfg.video.audio_detection = False
     cfg.video.transcript_path = str(transcript_path)
     cfg.demo_filter.enabled = True
-    cfg.demo_filter.gallery_min_words = 0  # disable gallery check for synthetic video
 
     fake_client = MagicMock()
     fake_client.pick_moments.return_value = [
