@@ -62,6 +62,14 @@ def build_context(
                 "alignment_confidence": r.alignment_confidence or "content",
                 "ocr_text": r.ocr_text or "",
                 "ocr_tokens": list(r.ocr_tokens or []),
+                "merged_anchors": [
+                    {
+                        "timestamp_s": a.timestamp,
+                        "visual_context_goal": a.visual_context_goal,
+                        "textual_anchor": a.textual_anchor,
+                    }
+                    for a in (r.anchors or [])
+                ],
             }
         )
         prev_ts = ts
@@ -90,6 +98,7 @@ def build_context(
                 t_entry["screenshot_ids"].append(s_entry["id"])
 
     return {
+        "schema_version": 2,
         "video": {
             "filename": filename,
             "duration_s": duration_s,
@@ -124,21 +133,25 @@ def _format_duration(seconds: float) -> str:
 def _screenshot_block(s: dict[str, Any]) -> list[str]:
     """Render a screenshot annotation block as Markdown lines.
 
-    Compacted form: bolded header + image only. The ``[guaranteed]`` tag
-    is appended to the header when the screenshot originated from a
-    Fathom action-item anchor. The blockquoted ``textual_anchor`` and
-    the ``downstream_utility`` caption are intentionally omitted — both
-    duplicated information already present in the transcript or header.
+    Compacted form: bolded header + image. Anchors that merged into this
+    frame during dedup are appended as italic bullets with their own
+    timestamps so the transcript evidence is preserved even when multiple
+    semantic markers collapse onto one image.
     """
     goal = s.get("visual_context_goal") or (s.get("trigger") or "visual_change").replace("_", " ")
     header = f"**Screenshot {s['id']} ({s['timestamp']}) — {goal}**"
     if s.get("moment_source") == "anchor":
         header += " [guaranteed]"
-    return [
+    lines: list[str] = [
         header,
         f"![Screenshot]({s['file']})",
-        "",
     ]
+    for m in s.get("merged_anchors") or []:
+        ts = m.get("timestamp_s", 0.0)
+        goal_text = m.get("visual_context_goal", "")
+        lines.append(f"- _Also referenced at {format_timestamp(ts)}: {goal_text}_")
+    lines.append("")
+    return lines
 
 
 def _format_short_timestamp(seconds: float) -> str:

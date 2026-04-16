@@ -282,7 +282,6 @@ def test_select_frames_for_moments_picks_first_stable_frame(tmp_path, monkeypatc
         ssim_stability_threshold=0.92,
         forward_search_step_sec=0.5,
         forward_search_window_max_sec=5.0,
-        gallery_min_words=0,
     )
 
     monkeypatch.setattr(
@@ -329,7 +328,7 @@ def test_select_frames_for_moments_drops_gallery_frames(tmp_path, monkeypatch):
         )
     ]
     transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=5)
+    cfg = DemoFilterConfig(enabled=True)
 
     monkeypatch.setattr(
         "peeklet.core.demo_filter._is_low_info_frame",
@@ -367,7 +366,7 @@ def test_select_frames_for_moments_drops_moment_with_no_segment(tmp_path, monkey
         Moment(timestamp=50.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u")
     ]
     transcript = [TranscriptSegment(start=0.0, end=10.0, text="x")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+    cfg = DemoFilterConfig(enabled=True)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -388,7 +387,7 @@ def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
 
     decoder = _make_decoder_for_moments(meta_duration=60.0)
     transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+    cfg = DemoFilterConfig(enabled=True)
 
     fake_moments = [
         Moment(timestamp=10.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u")
@@ -538,20 +537,32 @@ def _patch_save_keyframe(monkeypatch, tmp_path):
 
 
 def test_select_frames_for_moments_dedups_near_duplicate_second_moment(tmp_path, monkeypatch):
-    """Two moments whose candidate frames are identical → second is dropped."""
+    """Two moments whose candidate frames have identical OCR content → second is dropped.
+
+    Dedup now uses Jaccard on OCR tokens (primary) or dHash (fallback).
+    We mock both to produce identical tokens and zero hamming distance so
+    the unified predicate drops the second moment regardless of SSIM.
+    """
     from peeklet.config import DemoFilterConfig
+    from peeklet.core import demo_filter
     from peeklet.core.audio import TranscriptSegment
-    from peeklet.core.demo_filter import select_frames_for_moments
     from peeklet.utils.types import Moment
 
     decoder = _make_decoder_for_moments(meta_duration=600.0)
-    # Every extracted frame is identical → SSIM == 1.0 → dedup must trigger.
     decoder.extract_frame_at.side_effect = lambda ts: (
         np.full((100, 100, 3), 100, dtype=np.uint8),
         float(ts),
         int(ts * 30),
     )
     _patch_save_keyframe(monkeypatch, tmp_path)
+    # Identical OCR on every frame → Jaccard=1.0 → DROP after first saved
+    identical_tokens = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}
+    monkeypatch.setattr(
+        demo_filter,
+        "_ocr_text_and_tokens",
+        lambda frame, dim: ("alpha beta gamma delta epsilon zeta", identical_tokens),
+    )
+    monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0)
 
     moments = [
         Moment(
@@ -568,9 +579,9 @@ def test_select_frames_for_moments_dedups_near_duplicate_second_moment(tmp_path,
         TranscriptSegment(start=8.0, end=12.0, text="a"),
         TranscriptSegment(start=98.0, end=102.0, text="b"),
     ]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.95)
+    cfg = DemoFilterConfig(enabled=True)
 
-    results = select_frames_for_moments(
+    results = demo_filter.select_frames_for_moments(
         decoder=decoder,
         moments=moments,
         transcript=transcript,
@@ -614,7 +625,7 @@ def test_select_frames_for_moments_keeps_distinct_second_moment(tmp_path, monkey
         TranscriptSegment(start=8.0, end=12.0, text="a"),
         TranscriptSegment(start=98.0, end=102.0, text="b"),
     ]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.95)
+    cfg = DemoFilterConfig(enabled=True, dedup_ssim_threshold=0.95)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -653,7 +664,7 @@ def test_select_frames_for_moments_dedup_disabled_when_threshold_is_one(tmp_path
         TranscriptSegment(start=8.0, end=12.0, text="x"),
         TranscriptSegment(start=98.0, end=102.0, text="y"),
     ]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=1.0)
+    cfg = DemoFilterConfig(enabled=True, dedup_ssim_threshold=1.0)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -666,11 +677,16 @@ def test_select_frames_for_moments_dedup_disabled_when_threshold_is_one(tmp_path
     assert len(results) == 2
 
 
-def test_select_frames_for_moments_dedup_drops_all_when_threshold_is_zero(tmp_path, monkeypatch):
-    """dedup_ssim_threshold=0.0 drops every moment after the first if frames overlap at all."""
+def test_select_frames_for_moments_dedup_drops_all_when_content_identical(tmp_path, monkeypatch):
+    """Three moments with identical OCR content → only first is saved.
+
+    Dedup now uses Jaccard on OCR tokens (primary). When all frames return the
+    same token set with >= min_ocr_tokens_for_jaccard tokens, every frame after
+    the first is dropped by the unified predicate.
+    """
     from peeklet.config import DemoFilterConfig
+    from peeklet.core import demo_filter
     from peeklet.core.audio import TranscriptSegment
-    from peeklet.core.demo_filter import select_frames_for_moments
     from peeklet.utils.types import Moment
 
     decoder = _make_decoder_for_moments(meta_duration=600.0)
@@ -680,6 +696,13 @@ def test_select_frames_for_moments_dedup_drops_all_when_threshold_is_zero(tmp_pa
         int(ts * 30),
     )
     _patch_save_keyframe(monkeypatch, tmp_path)
+    identical_tokens = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}
+    monkeypatch.setattr(
+        demo_filter,
+        "_ocr_text_and_tokens",
+        lambda frame, dim: ("alpha beta gamma delta epsilon zeta", identical_tokens),
+    )
+    monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0)
 
     moments = [
         Moment(timestamp=10.0, visual_context_goal="a", textual_anchor="t", downstream_utility="u"),
@@ -695,9 +718,9 @@ def test_select_frames_for_moments_dedup_drops_all_when_threshold_is_zero(tmp_pa
         TranscriptSegment(start=98.0, end=102.0, text="y"),
         TranscriptSegment(start=198.0, end=202.0, text="z"),
     ]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.0)
+    cfg = DemoFilterConfig(enabled=True)
 
-    results = select_frames_for_moments(
+    results = demo_filter.select_frames_for_moments(
         decoder=decoder,
         moments=moments,
         transcript=transcript,
@@ -731,7 +754,7 @@ def test_select_frames_for_moments_tail_skip_drops_moment_past_cutoff(tmp_path, 
         )
     ]
     transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
+    cfg = DemoFilterConfig(enabled=True, tail_skip_ratio=0.02)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -768,7 +791,7 @@ def test_select_frames_for_moments_tail_skip_keeps_moment_before_cutoff(tmp_path
         )
     ]
     transcript = [TranscriptSegment(start=93.0, end=98.0, text="x")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
+    cfg = DemoFilterConfig(enabled=True, tail_skip_ratio=0.02)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -803,7 +826,7 @@ def test_select_frames_for_moments_tail_skip_disabled_when_ratio_is_zero(tmp_pat
         )
     ]
     transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.0)
+    cfg = DemoFilterConfig(enabled=True, tail_skip_ratio=0.0)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -816,8 +839,13 @@ def test_select_frames_for_moments_tail_skip_disabled_when_ratio_is_zero(tmp_pat
     assert len(results) == 1
 
 
-def test_anchor_moment_skips_dedup(tmp_path, monkeypatch):
-    """Anchor moments bypass the dedup filter — two identical anchors both saved."""
+def test_distinct_anchors_both_save(tmp_path, monkeypatch):
+    """Two anchors with distinct dHash values both save under dedup predicate.
+
+    With empty OCR tokens and distinct dhashes (due to random hash injection),
+    the dedup predicate returns SAVE for both frames since there's no Jaccard
+    overlap to trigger a collision and the dhash distance exceeds the threshold.
+    """
     from peeklet.config import DemoFilterConfig
     from peeklet.core.audio import TranscriptSegment
     from peeklet.core.demo_filter import select_frames_for_moments
@@ -851,7 +879,7 @@ def test_anchor_moment_skips_dedup(tmp_path, monkeypatch):
         TranscriptSegment(start=8.0, end=12.0, text="a"),
         TranscriptSegment(start=98.0, end=102.0, text="b"),
     ]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, dedup_ssim_threshold=0.95)
+    cfg = DemoFilterConfig(enabled=True, dedup_ssim_threshold=0.95)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -888,7 +916,7 @@ def test_anchor_moment_skips_tail_skip(tmp_path, monkeypatch):
         ),
     ]
     transcript = [TranscriptSegment(start=95.0, end=100.0, text="x")]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0, tail_skip_ratio=0.02)
+    cfg = DemoFilterConfig(enabled=True, tail_skip_ratio=0.02)
 
     results = select_frames_for_moments(
         decoder=decoder,
@@ -997,7 +1025,7 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
         TranscriptSegment(start=230.0, end=235.0, text="Fix assistant prompt"),
         TranscriptSegment(start=498.0, end=505.0, text="Other discussion"),
     ]
-    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+    cfg = DemoFilterConfig(enabled=True)
 
     fake_llm_moments = [
         Moment(
@@ -1356,14 +1384,19 @@ class TestPhashDedup:
         )
         assert len(results) == 1
 
-    def test_anchor_bypasses_phash_dedup(self, tmp_path, monkeypatch):
+    def test_anchor_dedup_collision_merges_into_prior(self, tmp_path, monkeypatch):
+        """An anchor that dedup-collides with the prior saved frame is merged
+        into that frame's anchors list rather than force-saved or silently dropped.
+
+        Under the unified predicate, anchor + dedup collision = MERGE_INTO_PREV.
+        The transcript evidence is preserved; no second image is written.
+        """
         from peeklet.config import DemoFilterConfig
         from peeklet.core import demo_filter
         from peeklet.core.audio import TranscriptSegment
         from peeklet.utils.types import Moment
 
         monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
-        monkeypatch.setattr("peeklet.core.comparator.compare_frames", lambda a, b: _StubSsim(0.0))
         monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0xABCD1234)
         monkeypatch.setattr(demo_filter, "hamming_distance", lambda a, b: 0)
         monkeypatch.setattr(
@@ -1398,7 +1431,10 @@ class TestPhashDedup:
             config=DemoFilterConfig(),
             output_dir=tmp_path,
         )
-        assert len(results) == 2
+        # Anchor on dedup collision → merged, not force-saved
+        assert len(results) == 1
+        assert len(results[0].anchors) == 1
+        assert results[0].anchors[0].visual_context_goal == "second anchor"
 
 
 class TestGapFill:
@@ -1448,9 +1484,8 @@ class TestGapFill:
         ]
         cfg = DemoFilterConfig(
             enabled=True,
-            gallery_min_words=0,
             dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
+            dhash_hamming_threshold=0,
             max_seconds_between_keyframes=120.0,
         )
 
@@ -1504,9 +1539,8 @@ class TestGapFill:
         transcript = [TranscriptSegment(start=0.0, end=600.0, text="long")]
         cfg = DemoFilterConfig(
             enabled=True,
-            gallery_min_words=0,
             dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
+            dhash_hamming_threshold=0,
             max_seconds_between_keyframes=0.0,
         )
 
@@ -1568,9 +1602,8 @@ class TestGapFill:
         transcript = [TranscriptSegment(start=0.0, end=600.0, text="long")]
         cfg = DemoFilterConfig(
             enabled=True,
-            gallery_min_words=0,
             dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
+            dhash_hamming_threshold=0,
             max_seconds_between_keyframes=120.0,
         )
 
@@ -1627,9 +1660,8 @@ class TestCaptionImageAlignment:
             forward_search_step_sec=0.5,
             forward_search_window_max_sec=4.0,
             search_window_lookback_sec=2.0,
-            gallery_min_words=0,
             dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
+            dhash_hamming_threshold=0,
             max_seconds_between_keyframes=0.0,
         )
         defaults.update(overrides)
@@ -1874,3 +1906,450 @@ class TestCaptionImageAlignment:
         assert results[0].ocr_text == "Invoice Approval Dashboard"
         assert set(results[0].ocr_tokens or []) == {"invoice", "approval", "dashboard"}
         assert results[0].alignment_confidence == "content"
+
+
+class TestDedupState:
+    def test_empty_state_has_no_prior(self):
+        from peeklet.core.demo_filter import DedupState
+
+        state = DedupState()
+        assert state.last_saved_tokens is None
+        assert state.last_saved_dhash is None
+        assert state.last_saved_result is None
+
+    def test_update_sets_all_three(self):
+        from peeklet.core.demo_filter import DedupState
+        from peeklet.utils.types import EventType, FrameResult
+
+        state = DedupState()
+        fr = FrameResult(
+            frame_id="demo_0001_00001000ms",
+            event_type=EventType.KEYFRAME,
+            is_keyframe=True,
+            perceptual_hash="",
+            frame_width=1920,
+            frame_height=1080,
+        )
+        state.update(tokens={"hello", "world"}, dhash=123, result=fr)
+        assert state.last_saved_tokens == {"hello", "world"}
+        assert state.last_saved_dhash == 123
+        assert state.last_saved_result is fr
+
+
+class TestShouldSaveFrame:
+    def _cfg(self):
+        from peeklet.config import DemoFilterConfig
+
+        return DemoFilterConfig(
+            dedup_jaccard_threshold=0.95,
+            min_ocr_tokens_for_jaccard=5,
+            dhash_hamming_threshold=5,
+            min_text_lines=10,
+            min_grid_cells=12,
+            min_edge_ratio=0.015,
+        )
+
+    def _moment(self, source="llm"):
+        from peeklet.utils.types import Moment
+
+        return Moment(
+            timestamp=10.0,
+            visual_context_goal="dashboard",
+            textual_anchor="",
+            downstream_utility="",
+            source=source,
+        )
+
+    def _fake_frame(self):
+        import numpy as np
+
+        return np.zeros((100, 100, 3), dtype=np.uint8)
+
+    def test_empty_state_returns_save(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState()
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"alpha", "beta", "gamma", "delta", "epsilon", "zeta"},
+            frame_dhash=0,
+            moment=self._moment(),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.SAVE
+
+    def test_low_info_non_anchor_drops(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: True)
+        state = demo_filter.DedupState()
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens=set(),
+            frame_dhash=0,
+            moment=self._moment(source="llm"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.DROP
+
+    def test_low_info_anchor_still_saves(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: True)
+        state = demo_filter.DedupState()
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens=set(),
+            frame_dhash=0,
+            moment=self._moment(source="anchor"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.SAVE
+
+    def test_high_jaccard_non_anchor_drops(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState(
+            last_saved_tokens={"alpha", "beta", "gamma", "delta", "epsilon", "zeta"},
+            last_saved_dhash=0,
+            last_saved_result=None,
+        )
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"alpha", "beta", "gamma", "delta", "epsilon", "zeta"},
+            frame_dhash=0,
+            moment=self._moment(source="llm"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.DROP
+
+    def test_high_jaccard_anchor_merges(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState(
+            last_saved_tokens={"alpha", "beta", "gamma", "delta", "epsilon", "zeta"},
+            last_saved_dhash=0,
+            last_saved_result=None,
+        )
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"alpha", "beta", "gamma", "delta", "epsilon", "zeta"},
+            frame_dhash=0,
+            moment=self._moment(source="anchor"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.MERGE_INTO_PREV
+
+    def test_sparse_tokens_uses_dhash_fallback_drops(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState(
+            last_saved_tokens={"one", "two"},  # sparse (< 5)
+            last_saved_dhash=0,
+            last_saved_result=None,
+        )
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"one", "two"},
+            frame_dhash=0,  # hamming == 0
+            moment=self._moment(source="llm"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.DROP
+
+    def test_sparse_tokens_dhash_collision_anchor_merges(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState(
+            last_saved_tokens={"one", "two"},  # sparse (< min_ocr_tokens_for_jaccard)
+            last_saved_dhash=0,
+            last_saved_result=None,
+        )
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"one", "two"},
+            frame_dhash=0,  # hamming == 0, within threshold
+            moment=self._moment(source="anchor"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.MERGE_INTO_PREV
+
+    def test_sparse_tokens_distinct_dhash_saves(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState(
+            last_saved_tokens={"one", "two"},
+            last_saved_dhash=0,
+            last_saved_result=None,
+        )
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"one", "two"},
+            frame_dhash=0xFFFFFFFFFFFFFFFF,  # max hamming distance
+            moment=self._moment(source="llm"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.SAVE
+
+    def test_distinct_tokens_saves(self, monkeypatch):
+        from peeklet.core import demo_filter
+
+        monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+        state = demo_filter.DedupState(
+            last_saved_tokens={"alpha", "beta", "gamma", "delta", "epsilon", "zeta"},
+            last_saved_dhash=0,
+            last_saved_result=None,
+        )
+        decision = demo_filter._should_save_frame(
+            frame=self._fake_frame(),
+            frame_tokens={"foo", "bar", "baz", "qux", "quux", "corge"},
+            frame_dhash=0xFFFFFFFFFFFFFFFF,
+            moment=self._moment(source="llm"),
+            state=state,
+            config=self._cfg(),
+        )
+        assert decision == demo_filter.SaveDecision.SAVE
+
+
+def test_anchor_colliding_with_prev_merges_into_prior_result(tmp_path, monkeypatch):
+    """When an anchor lands on an already-saved near-duplicate frame, its
+    transcript evidence is appended to the prior FrameResult.anchors list
+    instead of saving a second image or silently dropping the anchor."""
+    import numpy as np
+
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core import demo_filter
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.utils.types import Moment
+
+    frame_tokens = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}
+
+    monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+    monkeypatch.setattr(
+        demo_filter,
+        "_ocr_text_and_tokens",
+        lambda frame, dim: ("alpha beta gamma delta epsilon zeta eta", frame_tokens),
+    )
+    monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0)
+
+    class FakeDecoder:
+        def get_metadata(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(filename="vid.mp4", duration=60.0)
+
+        def extract_frame_at(self, ts):
+            return np.zeros((100, 100, 3), dtype=np.uint8), ts, int(ts * 30)
+
+    seg = TranscriptSegment(start=0.0, end=60.0, text="...", speaker=None)
+    moments = [
+        Moment(
+            timestamp=10.0,
+            visual_context_goal="dashboard",
+            textual_anchor="",
+            downstream_utility="",
+            source="llm",
+        ),
+        Moment(
+            timestamp=15.0,
+            visual_context_goal="action: fix it",
+            textual_anchor="we'll fix it",
+            downstream_utility="",
+            source="anchor",
+        ),
+    ]
+    cfg = DemoFilterConfig(max_seconds_between_keyframes=0.0)
+
+    monkeypatch.setattr(
+        demo_filter,
+        "save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+    results = demo_filter.select_frames_for_moments(
+        decoder=FakeDecoder(),
+        moments=moments,
+        transcript=[seg],
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1, "anchor should merge into prior result, not save a 2nd image"
+    assert len(results[0].anchors) == 1
+    assert results[0].anchors[0].timestamp == 15.0
+    assert results[0].anchors[0].visual_context_goal == "action: fix it"
+
+
+def test_gap_fill_respects_dedup_state(tmp_path, monkeypatch):
+    """Gap-fill in a static region should not emit near-duplicate frames.
+
+    Two distinct LLM moments far apart in a video where every frame has
+    identical OCR tokens. The first LLM moment saves; the second is
+    dropped by the unified predicate (Jaccard=1.0). Gap-fill attempts
+    synthetic midpoint moments — all also share the same tokens, so
+    all are dropped. Expected: exactly 1 saved frame.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core import demo_filter
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.utils.types import Moment
+
+    frame_tokens = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}
+    monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+    monkeypatch.setattr(
+        demo_filter,
+        "_ocr_text_and_tokens",
+        lambda frame, dim: ("alpha beta gamma delta epsilon zeta eta", frame_tokens),
+    )
+    monkeypatch.setattr(demo_filter, "dhash_64", lambda f: 0)
+
+    class FakeDecoder:
+        def get_metadata(self):
+            return SimpleNamespace(filename="vid.mp4", duration=600.0)
+
+        def extract_frame_at(self, ts):
+            return np.zeros((100, 100, 3), dtype=np.uint8), ts, int(ts * 30)
+
+    seg = TranscriptSegment(start=0.0, end=600.0, text="...", speaker=None)
+    moments = [
+        Moment(
+            timestamp=10.0,
+            visual_context_goal="a",
+            textual_anchor="",
+            downstream_utility="",
+            source="llm",
+        ),
+        Moment(
+            timestamp=500.0,
+            visual_context_goal="b",
+            textual_anchor="",
+            downstream_utility="",
+            source="llm",
+        ),
+    ]
+    cfg = DemoFilterConfig(max_seconds_between_keyframes=60.0)
+
+    monkeypatch.setattr(
+        demo_filter,
+        "save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+    results = demo_filter.select_frames_for_moments(
+        decoder=FakeDecoder(),
+        moments=moments,
+        transcript=[seg],
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    assert len(results) == 1
+
+
+def test_gap_fill_midpoint_duplicate_of_last_saved_is_dropped(tmp_path, monkeypatch):
+    """Gap-fill must not emit a midpoint that duplicates the most recently
+    saved keyframe's content.
+
+    Main loop saves two distinct frames (scene A at t=10, scene B at t=500).
+    Gap-fill then attempts midpoints ~255s inside scene B — those frames
+    share their OCR tokens with the prior saved (scene B) result. The
+    unified predicate must reject them via shared DedupState. Before the
+    Task 5 refactor, gap-fill bypassed dedup entirely and would have
+    silently added several duplicate scene-B frames.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core import demo_filter
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.utils.types import Moment
+
+    scene_a_tokens = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}
+    scene_b_tokens = {"foo", "bar", "baz", "qux", "quux", "corge", "grault"}
+
+    def fake_ocr(frame, _dim):
+        v = int(frame[0, 0, 0])
+        tokens = scene_a_tokens if v < 50 else scene_b_tokens
+        return " ".join(sorted(tokens)), tokens
+
+    def fake_dhash(frame):
+        v = int(frame[0, 0, 0])
+        return 0x1111111111111111 if v < 50 else 0xEEEEEEEEEEEEEEEE
+
+    monkeypatch.setattr(demo_filter, "_is_low_info_frame", lambda f, c: False)
+    monkeypatch.setattr(demo_filter, "_ocr_text_and_tokens", fake_ocr)
+    monkeypatch.setattr(demo_filter, "dhash_64", fake_dhash)
+
+    class FakeDecoder:
+        def get_metadata(self):
+            return SimpleNamespace(filename="vid.mp4", duration=600.0)
+
+        def extract_frame_at(self, ts):
+            # Scene boundary at 100s — far enough below the gap-fill midpoint
+            # (~252s) that the midpoint's search window (window start ~249s)
+            # stays solidly in scene B regardless of lookback.
+            value = 10 if ts < 100.0 else 100
+            frame = np.full((100, 100, 3), value, dtype=np.uint8)
+            return frame, ts, int(ts * 30)
+
+    seg = TranscriptSegment(start=0.0, end=600.0, text="...", speaker=None)
+    moments = [
+        Moment(
+            timestamp=10.0,
+            visual_context_goal="A1",
+            textual_anchor="",
+            downstream_utility="",
+            source="llm",
+        ),
+        Moment(
+            timestamp=500.0,
+            visual_context_goal="B1",
+            textual_anchor="",
+            downstream_utility="",
+            source="llm",
+        ),
+    ]
+    cfg = DemoFilterConfig(max_seconds_between_keyframes=60.0)
+
+    monkeypatch.setattr(
+        demo_filter,
+        "save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+
+    results = demo_filter.select_frames_for_moments(
+        decoder=FakeDecoder(),
+        moments=moments,
+        transcript=[seg],
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    # Main loop saves A@10 (scene A tokens) and B@500 (scene B tokens) — distinct.
+    # Gap 490s > 60s → gap-fill runs. Midpoint ~255s falls in scene B and
+    # duplicates the last saved (scene B) result → DROPPED.
+    # Every retried midpoint in scene B also drops. No gap-fill frames should
+    # be saved. Result: exactly the 2 main-loop frames.
+    assert len(results) == 2
+    # Confirm they're the main-loop originals, not gap-fills
+    assert all(r.moment_source != "gap_fill" for r in results)

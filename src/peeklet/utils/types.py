@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Literal
 
@@ -43,6 +43,21 @@ class Moment:
     textual_anchor: str  # the transcript line that triggers this need
     downstream_utility: str  # why the MLLM needs this image
     source: str = "llm"  # "llm" | "anchor"
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorRef:
+    """Lightweight reference to an anchor merged into a saved frame.
+
+    When a Fathom action-item anchor dedups against the previous saved
+    keyframe, the transcript evidence is preserved by appending one of
+    these to the prior ``FrameResult.anchors`` list instead of silently
+    dropping the anchor or force-saving a duplicate image.
+    """
+
+    timestamp: float
+    visual_context_goal: str
+    textual_anchor: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +111,7 @@ class FrameResult:
     textual_anchor: str | None = None
     downstream_utility: str | None = None
     moment_source: str | None = None  # "llm" | "anchor"
-    alignment_confidence: Literal["content", "temporal_only"] | None = None
+    alignment_confidence: Literal["content", "temporal_only", "unknown"] | None = None
     ocr_text: str | None = None
     ocr_tokens: list[str] | None = None
+    anchors: list[AnchorRef] = field(default_factory=list)

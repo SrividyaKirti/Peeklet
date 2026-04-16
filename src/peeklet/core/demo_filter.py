@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import re
 from collections import namedtuple
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,7 +21,7 @@ import numpy as np
 from peeklet.core.exporter import save_keyframe
 from peeklet.core.llm import build_llm_client
 from peeklet.utils.image import dhash_64, hamming_distance
-from peeklet.utils.types import EventType, FrameResult, Moment
+from peeklet.utils.types import AnchorRef, EventType, FrameResult, Moment
 
 if TYPE_CHECKING:
     from peeklet.config import DemoFilterConfig
@@ -33,6 +35,39 @@ try:
     import pytesseract
 except ImportError:  # pragma: no cover - exercised in install-error path
     pytesseract = None
+
+
+class SaveDecision(Enum):
+    """Outcome of the unified `_should_save_frame` predicate."""
+
+    SAVE = "save"
+    DROP = "drop"
+    MERGE_INTO_PREV = "merge_into_prev"
+
+
+@dataclass
+class DedupState:
+    """Shared dedup state threaded through every frame-save path.
+
+    Kept explicit (not a closure) so that gap-fill and main-loop paths
+    both take the same state by reference — forgetting to thread it
+    becomes a type error instead of a silent regression.
+    """
+
+    last_saved_tokens: set[str] | None = None
+    last_saved_dhash: int | None = None
+    last_saved_result: FrameResult | None = None
+
+    def update(
+        self,
+        tokens: set[str],
+        dhash: int,
+        result: FrameResult,
+    ) -> None:
+        self.last_saved_tokens = tokens
+        self.last_saved_dhash = dhash
+        self.last_saved_result = result
+
 
 _MIN_WORD_LENGTH = 2
 _MIN_WORD_CONFIDENCE = 30
@@ -74,7 +109,11 @@ def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
     try:
         data = pytesseract.image_to_data(downscaled, output_type=pytesseract.Output.DICT)
     except Exception as exc:
-        logger.warning("OCR failed on frame: %s", exc)
+        try:
+            frame_id = f"{dhash_64(frame):016x}"
+        except Exception:
+            frame_id = "<hash_failed>"
+        logger.warning("OCR failed on frame %s: %s", frame_id, exc)
         return []
 
     texts = data.get("text", [])
@@ -87,7 +126,15 @@ def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
     widths = data.get("width") or [0] * n
     heights = data.get("height") or [0] * n
     boxes: list[WordBox] = []
-    for text, conf, x, y, w, h in zip(texts, confs, lefts, tops, widths, heights, strict=False):
+    try:
+        rows = list(zip(texts, confs, lefts, tops, widths, heights, strict=True))
+    except ValueError as exc:
+        logger.warning(
+            "Tesseract column-length mismatch on frame (%s); OCR result discarded.",
+            exc,
+        )
+        return []
+    for text, conf, x, y, w, h in rows:
         if not text or len(text.strip()) < _MIN_WORD_LENGTH:
             continue
         try:
@@ -301,6 +348,65 @@ def _is_low_info_frame(frame: np.ndarray, config: DemoFilterConfig) -> bool:
     return True
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Jaccard similarity over two token sets. Returns 0 when either is empty."""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _should_save_frame(
+    frame: np.ndarray,
+    frame_tokens: set[str],
+    frame_dhash: int,
+    moment: Moment,
+    state: DedupState,
+    config: DemoFilterConfig,
+) -> SaveDecision:
+    """Unified save/drop/merge predicate — the single source of truth for
+    whether a candidate frame joins the keyframe stream.
+
+    Primary dedup signal is OCR-token Jaccard (robust to pixel noise in
+    screen-share recordings); dHash Hamming distance is the fallback when
+    either frame has fewer than ``config.min_ocr_tokens_for_jaccard``
+    tokens. Low-info frames are dropped unless the moment is a Fathom
+    anchor (we trust the semantic marker over the pixels). Anchors
+    never silently DROP on a dedup collision — they return MERGE_INTO_PREV
+    so the caller can preserve the transcript evidence on the prior frame.
+
+    Callers must pre-compute ``frame_tokens`` via ``_ocr_text_and_tokens``
+    and ``frame_dhash`` via ``dhash_64`` so this predicate stays pure and
+    free of side effects.
+    """
+    is_anchor = moment.source == "anchor"
+
+    if not is_anchor and _is_low_info_frame(frame, config):
+        return SaveDecision.DROP
+
+    if state.last_saved_tokens is None and state.last_saved_dhash is None:
+        return SaveDecision.SAVE
+
+    prev_tokens = state.last_saved_tokens or set()
+    can_use_jaccard = (
+        len(frame_tokens) >= config.min_ocr_tokens_for_jaccard
+        and len(prev_tokens) >= config.min_ocr_tokens_for_jaccard
+    )
+    if can_use_jaccard:
+        score = _jaccard(frame_tokens, prev_tokens)
+        if score >= config.dedup_jaccard_threshold:
+            return SaveDecision.MERGE_INTO_PREV if is_anchor else SaveDecision.DROP
+        return SaveDecision.SAVE
+
+    if state.last_saved_dhash is not None:
+        dist = hamming_distance(frame_dhash, state.last_saved_dhash)
+        if dist <= config.dhash_hamming_threshold:
+            return SaveDecision.MERGE_INTO_PREV if is_anchor else SaveDecision.DROP
+
+    return SaveDecision.SAVE
+
+
 def _build_search_window(
     moment_ts: float,
     segment: TranscriptSegment,
@@ -374,26 +480,6 @@ def _sample_window_frames(
         except Exception as exc:
             logger.warning("Failed to extract frame at %.2fs: %s", ts, exc)
     return samples
-
-
-def _pick_stable_index(
-    samples: list[tuple[np.ndarray, float, int]],
-    threshold: float,
-) -> int:
-    """Return the index of the first sample whose two neighbors are SSIM-similar.
-
-    Falls back to index 0 if no sample passes the bidirectional check (or if
-    the window has fewer than 3 samples to compare).
-    """
-    if len(samples) < 3:
-        return 0
-    for i in range(1, len(samples) - 1):
-        frame, _, _ = samples[i]
-        prev_frame, _, _ = samples[i - 1]
-        next_frame, _, _ = samples[i + 1]
-        if _is_stable(frame, prev_frame, next_frame, threshold):
-            return i
-    return 0
 
 
 def _pick_best_content_index(
@@ -486,16 +572,19 @@ def _fill_coverage_gaps(
     transcript: list[TranscriptSegment],
     config: DemoFilterConfig,
     output_dir: Path,
+    state: DedupState,
 ) -> list[FrameResult]:
     """Inject synthetic ``gap_fill`` frames wherever consecutive keyframes
     are more than ``max_seconds_between_keyframes`` apart.
 
     Walks the sorted results; when a gap exceeds the threshold, builds a
     synthetic :class:`Moment` at the midpoint and pushes it through the
-    same selection + low-info gates as LLM picks. If the gap-fill frame
-    is rejected (low-info or no segment), the gap is accepted — forcing
-    a bad frame would defeat the point of the low-info gate. Iterates
-    until no gaps remain or the safety cap is hit.
+    same ``_should_save_frame`` predicate used by the main loop. The
+    shared ``DedupState`` ensures a gap-fill that duplicates the most
+    recently saved keyframe is dropped rather than silently forced in.
+    If the midpoint is rejected, the gap is accepted — forcing a bad
+    frame would defeat the point of the low-info gate. Iterates until
+    no gaps remain or the safety cap is hit.
     """
     if config.max_seconds_between_keyframes <= 0.0 or len(results) < 2:
         return results
@@ -505,8 +594,6 @@ def _fill_coverage_gaps(
     filled = list(results)
     skip_midpoints: set[float] = set()
 
-    # Cap iterations to bound work. An 18-minute gap at max_gap=120 needs
-    # ~9 fills; 50 is comfortably above any realistic meeting.
     for _ in range(50):
         filled.sort(key=lambda r: r.video_timestamp or 0.0)
         inserted = False
@@ -535,35 +622,56 @@ def _fill_coverage_gaps(
                 )
                 continue
             picked_frame, picked_ts, picked_frame_num, _win = picked
-            frame_id = f"demo_gapfill_{int(picked_ts * 1000):08d}ms"
-            asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
             gap_ocr_text, gap_ocr_tokens = _ocr_text_and_tokens(
                 picked_frame, config.gallery_ocr_min_dim
             )
-            filled.append(
-                FrameResult(
-                    frame_id=frame_id,
-                    event_type=EventType.KEYFRAME,
-                    is_keyframe=True,
-                    perceptual_hash="",
-                    frame_width=picked_frame.shape[1],
-                    frame_height=picked_frame.shape[0],
-                    source_format="video",
-                    asset_path=str(asset_path),
-                    trigger_type="transcript_trigger",
-                    source_video=meta.filename,
-                    video_timestamp=picked_ts,
-                    video_frame_number=picked_frame_num,
-                    video_duration=meta.duration,
-                    visual_context_goal=synthetic.visual_context_goal,
-                    textual_anchor=synthetic.textual_anchor,
-                    downstream_utility=synthetic.downstream_utility,
-                    moment_source="gap_fill",
-                    alignment_confidence="temporal_only",
-                    ocr_text=gap_ocr_text,
-                    ocr_tokens=sorted(gap_ocr_tokens),
-                )
+            gap_dhash = dhash_64(picked_frame)
+            decision = _should_save_frame(
+                frame=picked_frame,
+                frame_tokens=gap_ocr_tokens,
+                frame_dhash=gap_dhash,
+                moment=synthetic,
+                state=state,
+                config=config,
             )
+            if decision is not SaveDecision.SAVE:
+                # Gap-fill moments are never anchors, so MERGE cannot occur.
+                # DROP means the midpoint duplicates a prior keyframe —
+                # give up on this gap and mark the midpoint skipped so we
+                # don't retry it.
+                skip_midpoints.add(midpoint)
+                logger.info(
+                    "Gap fill at %.2fs dropped by _should_save_frame; accepting gap.",
+                    midpoint,
+                )
+                continue
+
+            frame_id = f"demo_gapfill_{int(picked_ts * 1000):08d}ms"
+            asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
+            fr = FrameResult(
+                frame_id=frame_id,
+                event_type=EventType.KEYFRAME,
+                is_keyframe=True,
+                perceptual_hash="",
+                frame_width=picked_frame.shape[1],
+                frame_height=picked_frame.shape[0],
+                source_format="video",
+                asset_path=str(asset_path),
+                trigger_type="transcript_trigger",
+                source_video=meta.filename,
+                video_timestamp=picked_ts,
+                video_frame_number=picked_frame_num,
+                video_duration=meta.duration,
+                visual_context_goal=synthetic.visual_context_goal,
+                textual_anchor=synthetic.textual_anchor,
+                downstream_utility=synthetic.downstream_utility,
+                moment_source="gap_fill",
+                alignment_confidence="temporal_only",
+                ocr_text=gap_ocr_text,
+                ocr_tokens=sorted(gap_ocr_tokens),
+            )
+            filled.append(fr)
+            state.update(tokens=gap_ocr_tokens, dhash=gap_dhash, result=fr)
             inserted = True
             break
         if not inserted:
@@ -614,22 +722,20 @@ def select_frames_for_moments(
 
     Walks each moment, builds a forward search window inside the current
     transcript segment, samples frames at ``forward_search_step_sec`` intervals,
-    picks the first bidirectionally-stable frame, runs the gallery check, and
-    saves the surviving frame as a keyframe.
+    picks the best-content frame, runs the unified dedup predicate, and saves
+    surviving frames as keyframes. Anchors that collide with the prior saved
+    frame are merged into that frame's ``anchors`` list rather than dropped.
     """
-    from peeklet.core.comparator import compare_frames
-
     output_dir = Path(output_dir)
     meta = decoder.get_metadata()
     results: list[FrameResult] = []
-    last_saved_frame: np.ndarray | None = None
-    last_saved_phash: int | None = None
+    state = DedupState()
 
     tail_cutoff: float | None = None
     if config.tail_skip_ratio > 0.0 and meta.duration > 0.0:
         tail_cutoff = meta.duration * (1.0 - config.tail_skip_ratio)
 
-    for idx, moment in enumerate(moments, start=1):
+    for moment in moments:
         is_anchor = moment.source == "anchor"
 
         if not is_anchor and tail_cutoff is not None and moment.timestamp >= tail_cutoff:
@@ -648,6 +754,7 @@ def select_frames_for_moments(
             continue
         picked_frame, picked_ts, picked_frame_num, picked_window = picked
 
+        # --- Caption/image alignment block ---
         caption_tokens = _normalize_tokens(f"{moment.visual_context_goal} {moment.textual_anchor}")
         alignment_confidence: str = "content"
         frame_ocr_text, frame_ocr_tokens = _ocr_text_and_tokens(
@@ -656,11 +763,8 @@ def select_frames_for_moments(
         if caption_tokens:
             frame_tokens = frame_ocr_tokens
             if not (frame_tokens & caption_tokens):
-                # Try widening the search window once before falling back to
-                # temporal_only. Skip the retry if the initial window already
-                # spans the whole containing transcript segment (nothing to
-                # widen into).
                 seg = _find_segment_for_timestamp(moment.timestamp, transcript)
+                # Skip retry if the window already spans the whole segment (nothing to widen into).
                 already_exhausted = seg is not None and (
                     picked_window[0] <= seg.start and picked_window[1] >= seg.end
                 )
@@ -699,68 +803,74 @@ def select_frames_for_moments(
                         moment.timestamp,
                         moment.visual_context_goal,
                     )
+        # --- End alignment block ---
 
-        if not is_anchor and last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
-            dedup_score = compare_frames(picked_frame, last_saved_frame).ssim_score
-            if dedup_score > config.dedup_ssim_threshold:
-                logger.info(
-                    "Moment at %.2fs ('%s') is a near-duplicate of the previous "
-                    "keyframe (ssim=%.3f > %.3f), skipping.",
-                    moment.timestamp,
-                    moment.visual_context_goal,
-                    dedup_score,
-                    config.dedup_ssim_threshold,
-                )
-                continue
-
-        if not is_anchor and last_saved_phash is not None:
-            current_phash = dhash_64(picked_frame)
-            dist = hamming_distance(current_phash, last_saved_phash)
-            if dist <= config.phash_hamming_threshold:
-                logger.info(
-                    "Moment at %.2fs ('%s') pHash duplicate of previous keyframe "
-                    "(hamming=%d <= %d), skipping.",
-                    moment.timestamp,
-                    moment.visual_context_goal,
-                    dist,
-                    config.phash_hamming_threshold,
-                )
-                continue
-
-        frame_id = f"demo_{idx:04d}_{int(picked_ts * 1000):08d}ms"
-        asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
-        last_saved_frame = picked_frame
-        last_saved_phash = dhash_64(picked_frame)
-
-        results.append(
-            FrameResult(
-                frame_id=frame_id,
-                event_type=EventType.KEYFRAME,
-                is_keyframe=True,
-                perceptual_hash="",  # not computed in demo mode
-                frame_width=picked_frame.shape[1],
-                frame_height=picked_frame.shape[0],
-                source_format="video",
-                asset_path=str(asset_path),
-                trigger_type="transcript_trigger",
-                source_video=meta.filename,
-                video_timestamp=picked_ts,
-                video_frame_number=picked_frame_num,
-                video_duration=meta.duration,
-                visual_context_goal=moment.visual_context_goal,
-                textual_anchor=moment.textual_anchor,
-                downstream_utility=moment.downstream_utility,
-                moment_source=moment.source,
-                keyframe_index=idx,
-                alignment_confidence=alignment_confidence,  # type: ignore[arg-type]
-                ocr_text=frame_ocr_text,
-                ocr_tokens=sorted(frame_ocr_tokens),
-            )
+        frame_dhash = dhash_64(picked_frame)
+        decision = _should_save_frame(
+            frame=picked_frame,
+            frame_tokens=frame_ocr_tokens,
+            frame_dhash=frame_dhash,
+            moment=moment,
+            state=state,
+            config=config,
         )
 
-    results = _fill_coverage_gaps(decoder, results, transcript, config, output_dir)
+        if decision is SaveDecision.DROP:
+            logger.info(
+                "Moment at %.2fs ('%s') dropped by _should_save_frame.",
+                moment.timestamp,
+                moment.visual_context_goal,
+            )
+            continue
 
-    # Backfill total_keyframes
+        if decision is SaveDecision.MERGE_INTO_PREV:
+            if state.last_saved_result is not None:
+                state.last_saved_result.anchors.append(
+                    AnchorRef(
+                        timestamp=moment.timestamp,
+                        visual_context_goal=moment.visual_context_goal,
+                        textual_anchor=moment.textual_anchor,
+                    )
+                )
+                logger.info(
+                    "Anchor at %.2fs merged into prior saved frame (dedup collision).",
+                    moment.timestamp,
+                )
+            continue
+
+        # SAVE path
+        next_idx = len(results) + 1
+        frame_id = f"demo_{next_idx:04d}_{int(picked_ts * 1000):08d}ms"
+        asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
+
+        fr = FrameResult(
+            frame_id=frame_id,
+            event_type=EventType.KEYFRAME,
+            is_keyframe=True,
+            perceptual_hash="",
+            frame_width=picked_frame.shape[1],
+            frame_height=picked_frame.shape[0],
+            source_format="video",
+            asset_path=str(asset_path),
+            trigger_type="transcript_trigger",
+            source_video=meta.filename,
+            video_timestamp=picked_ts,
+            video_frame_number=picked_frame_num,
+            video_duration=meta.duration,
+            visual_context_goal=moment.visual_context_goal,
+            textual_anchor=moment.textual_anchor,
+            downstream_utility=moment.downstream_utility,
+            moment_source=moment.source,
+            keyframe_index=next_idx,
+            alignment_confidence=alignment_confidence,
+            ocr_text=frame_ocr_text,
+            ocr_tokens=sorted(frame_ocr_tokens),
+        )
+        results.append(fr)
+        state.update(tokens=frame_ocr_tokens, dhash=frame_dhash, result=fr)
+
+    results = _fill_coverage_gaps(decoder, results, transcript, config, output_dir, state)
+
     for r in results:
         r.total_keyframes = len(results)
     return results
