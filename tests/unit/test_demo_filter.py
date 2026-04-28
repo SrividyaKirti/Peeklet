@@ -1041,7 +1041,7 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
     fake_llm_moments = [
         Moment(
             timestamp=231.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
-        ),  # within 5s of anchor → dropped
+        ),  # within 5s of anchor → kept (Stage B dedup gates handle near-duplicates)
         Moment(
             timestamp=500.0,
             visual_context_goal="far away",
@@ -1074,8 +1074,8 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
         transcript_text=raw_text,
     )
 
-    # Should have anchor at 232 + llm pick at 500 = 2 results
-    assert len(results) == 2
+    # Should have anchor at 232 + llm pick at 231 + llm pick at 500 = 3 results
+    assert len(results) == 3
     sources = [r.moment_source for r in results]
     assert "anchor" in sources
     assert "llm" in sources
