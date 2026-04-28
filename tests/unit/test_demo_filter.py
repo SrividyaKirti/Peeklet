@@ -1122,6 +1122,12 @@ def test_apply_demo_filter_empty_anchors_runs_to_completion(tmp_path, monkeypatc
     monkeypatch.setattr(
         "peeklet.core.demo_filter._count_words_in_frame", lambda frame, downscale_dim: 0
     )
+    import os
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.dhash_64",
+        lambda _frame: int.from_bytes(os.urandom(8), "big"),
+    )
 
     # No transcript_text → anchors=[] path
     results = apply_demo_filter(
@@ -1133,11 +1139,11 @@ def test_apply_demo_filter_empty_anchors_runs_to_completion(tmp_path, monkeypatc
 
     # pick_moments must be called with empty anchors keyword arg
     fake_client.pick_moments.assert_called_once_with(transcript, 60.0, anchors=[])
-    # Result contains exactly the one LLM pick (or is empty if Stage B gates it)
-    # — either is valid; the key guarantee is no exception was raised.
-    assert isinstance(results, list)
+    # The LLM-only path must emit at least one keyframe; the set is exactly
+    # {"llm"} — no anchors, no gap_fill.
+    assert len(results) >= 1
     sources = {r.moment_source for r in results}
-    assert sources <= {"llm"}
+    assert sources == {"llm"}
 
 
 def test_apply_demo_filter_zero_moments_logs_warning_and_returns_empty(
