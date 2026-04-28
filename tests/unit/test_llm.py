@@ -536,3 +536,17 @@ def test_format_anchors_unlabeled_anchor_degrades():
     ]
 
     assert format_anchors_for_llm(anchors) == "[42.0] (unlabeled anchor)"
+
+
+def test_system_prompt_has_anchor_avoidance_and_placeholder():
+    from peeklet.core.llm import SYSTEM_PROMPT
+
+    # Old behavior must be gone — this was the root cause.
+    assert "MUST include a moment at or near each such timestamp" not in SYSTEM_PROMPT
+    assert "Action Item Anchors" not in SYSTEM_PROMPT
+
+    # New behavior must be present.
+    assert "Guaranteed Anchors" in SYSTEM_PROMPT
+    assert "Do NOT pick any moment within ±10 seconds" in SYSTEM_PROMPT
+    assert "{anchor_list}" in SYSTEM_PROMPT
+    assert "Silence is a valid answer" in SYSTEM_PROMPT
