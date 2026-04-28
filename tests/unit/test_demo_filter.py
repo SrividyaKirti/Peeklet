@@ -901,82 +901,121 @@ def test_anchor_moment_skips_tail_skip(tmp_path, monkeypatch):
 
 
 class TestMergeMoments:
-    def test_anchors_kept_llm_near_anchor_dropped(self):
+    def test_merge_moments_keeps_all_anchors_and_picks(self, caplog):
+        """Pure two-tier: nothing is dropped; warnings surface near-anchor picks."""
+        import logging
+
         from peeklet.core.demo_filter import merge_moments
         from peeklet.utils.types import Moment
 
         anchors = [
             Moment(
-                timestamp=232.0,
-                visual_context_goal="a",
-                textual_anchor="t",
-                downstream_utility="u",
+                timestamp=10.0,
+                visual_context_goal="A",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+            Moment(
+                timestamp=50.0,
+                visual_context_goal="B",
+                textual_anchor="",
+                downstream_utility="",
                 source="anchor",
             ),
         ]
         llm_picks = [
             Moment(
-                timestamp=230.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+                timestamp=12.0,
+                visual_context_goal="near A",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
             ),
             Moment(
-                timestamp=500.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
+                timestamp=30.0,
+                visual_context_goal="far",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
             ),
         ]
-        merged = merge_moments(anchors, llm_picks, proximity_sec=5.0)
-        assert len(merged) == 2
-        assert merged[0].timestamp == 232.0
-        assert merged[0].source == "anchor"
-        assert merged[1].timestamp == 500.0
-        assert merged[1].source == "llm"
+        with caplog.at_level(logging.WARNING):
+            merged = merge_moments(anchors, llm_picks)
 
-    def test_all_anchors_kept_when_no_llm_picks(self):
+        assert [m.timestamp for m in merged] == [10.0, 12.0, 30.0, 50.0]
+        # The 12.0 pick is within ±10s of the 10.0 anchor — must warn but not drop.
+        assert any("12.0" in r.message and "10.0" in r.message for r in caplog.records)
+
+    def test_merge_moments_sorts_by_timestamp(self):
         from peeklet.core.demo_filter import merge_moments
         from peeklet.utils.types import Moment
 
         anchors = [
             Moment(
-                timestamp=100.0,
-                visual_context_goal="a",
-                textual_anchor="t",
-                downstream_utility="u",
-                source="anchor",
-            ),
-            Moment(
-                timestamp=200.0,
-                visual_context_goal="b",
-                textual_anchor="t",
-                downstream_utility="u",
-                source="anchor",
-            ),
-        ]
-        merged = merge_moments(anchors, [], proximity_sec=5.0)
-        assert len(merged) == 2
-
-    def test_sorted_by_timestamp(self):
-        from peeklet.core.demo_filter import merge_moments
-        from peeklet.utils.types import Moment
-
-        anchors = [
-            Moment(
-                timestamp=500.0,
-                visual_context_goal="a",
-                textual_anchor="t",
-                downstream_utility="u",
+                timestamp=50.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
                 source="anchor",
             ),
         ]
         llm_picks = [
             Moment(
-                timestamp=100.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+                timestamp=10.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+            Moment(
+                timestamp=30.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
             ),
         ]
-        merged = merge_moments(anchors, llm_picks, proximity_sec=5.0)
-        assert [m.timestamp for m in merged] == [100.0, 500.0]
+        merged = merge_moments(anchors, llm_picks)
+        assert [m.timestamp for m in merged] == [10.0, 30.0, 50.0]
 
-    def test_empty_inputs(self):
+    def test_merge_moments_handles_empty_inputs(self):
         from peeklet.core.demo_filter import merge_moments
 
-        assert merge_moments([], [], proximity_sec=5.0) == []
+        assert merge_moments([], []) == []
+
+    def test_merge_moments_logs_summary(self, caplog):
+        """INFO-level summary logged on every call."""
+        import logging
+
+        from peeklet.core.demo_filter import merge_moments
+        from peeklet.utils.types import Moment
+
+        anchors = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+        ]
+        llm_picks = [
+            Moment(
+                timestamp=30.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+        ]
+        with caplog.at_level(logging.INFO):
+            merge_moments(anchors, llm_picks)
+
+        assert any(
+            "merged 2 moments" in r.message and "1 anchor" in r.message and "1 llm" in r.message
+            for r in caplog.records
+        )
 
 
 def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):

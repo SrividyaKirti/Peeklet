@@ -578,28 +578,41 @@ def _fill_coverage_gaps(
 def merge_moments(
     anchors: list[Moment],
     llm_picks: list[Moment],
-    proximity_sec: float = 5.0,
+    warn_proximity_sec: float = 10.0,
 ) -> list[Moment]:
-    """Merge anchor and LLM-picked moments.
+    """Merge anchor and LLM-picked moments without dropping anything.
 
-    All anchors are kept unconditionally. LLM picks within
-    +/-proximity_sec of any anchor are dropped. Result is sorted
-    by timestamp.
+    Stage B's SSIM + pHash + low-info gates are the sole dedup mechanism;
+    time-proximity is a poor proxy for content similarity, so we surface
+    near-anchor picks as warnings instead of silently dropping them.
     """
     anchor_timestamps = [a.timestamp for a in anchors]
-    filtered_llm: list[Moment] = []
+    near_anchor = 0
     for pick in llm_picks:
-        if any(abs(pick.timestamp - at) <= proximity_sec for at in anchor_timestamps):
-            logger.info(
-                "LLM pick at %.2fs dropped — within %.1fs of an anchor",
+        nearest = min(
+            ((abs(pick.timestamp - at), at) for at in anchor_timestamps),
+            default=None,
+        )
+        if nearest is not None and nearest[0] <= warn_proximity_sec:
+            near_anchor += 1
+            logger.warning(
+                "LLM pick at %.2fs within %.1fs of anchor at %.2fs — kept, "
+                "but anchor proximity may produce a near-duplicate",
                 pick.timestamp,
-                proximity_sec,
+                nearest[0],
+                nearest[1],
             )
-            continue
-        filtered_llm.append(pick)
 
-    combined = list(anchors) + filtered_llm
+    combined = list(anchors) + list(llm_picks)
     combined.sort(key=lambda m: m.timestamp)
+    logger.info(
+        "merged %d moments: %d anchor, %d llm (%d of %d near-anchor)",
+        len(combined),
+        len(anchors),
+        len(llm_picks),
+        near_anchor,
+        len(llm_picks),
+    )
     return combined
 
 
@@ -798,7 +811,7 @@ def apply_demo_filter(
     if anchors:
         logger.info("Parsed %d ACTION ITEM anchors from transcript", len(anchors))
 
-    moments = merge_moments(anchors, llm_picks, proximity_sec=5.0)
+    moments = merge_moments(anchors, llm_picks)
 
     if not moments:
         logger.warning("No screenshot-worthy moments found (LLM + anchors).")
