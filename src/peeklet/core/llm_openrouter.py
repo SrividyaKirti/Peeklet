@@ -11,7 +11,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from peeklet.core.llm import format_transcript_for_llm
+from peeklet.core.llm import SYSTEM_PROMPT, format_transcript_for_llm
 from peeklet.core.llm_openai import _call_openai_chat_with_retry
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ class OpenRouterClient:
         video_duration: float,
         anchors: list[Moment],
     ) -> list[Moment]:
-        from peeklet.core.llm import SYSTEM_PROMPT, format_anchors_for_llm
+        from peeklet.core.llm import format_anchors_for_llm
 
         anchor_list = format_anchors_for_llm(anchors)
         system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
