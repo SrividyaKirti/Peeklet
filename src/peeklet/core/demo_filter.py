@@ -691,10 +691,9 @@ def apply_demo_filter(
 ) -> list[FrameResult]:
     """Top-level demo-mode entry point.
 
-    Builds the LLM client, asks it to pick screenshot-worthy moments from the
-    transcript, parses Fathom ACTION ITEM anchors from the raw transcript text,
-    merges anchors with LLM picks, then runs Stage B (forward-search + stability
-    + gallery check) to pick the actual frames.
+    Parses Fathom anchors from ``transcript_text`` first, asks the LLM to
+    pick complementary moments aware of those anchors, merges anchor and
+    LLM picks (warn-only), then runs Stage B to pick the actual frames.
     """
     from peeklet.core.audio import parse_fathom_anchors
 
@@ -707,17 +706,19 @@ def apply_demo_filter(
     meta = decoder.get_metadata()
     client = build_llm_client(provider=config.llm_provider, model=config.llm_model)
 
-    llm_picks = client.pick_moments(transcript, meta.duration)
-    logger.info("LLM picked %d screenshot-worthy moments", len(llm_picks))
-
     anchors = parse_fathom_anchors(transcript_text) if transcript_text else []
     if anchors:
         logger.info("Parsed %d ACTION ITEM anchors from transcript", len(anchors))
 
+    llm_picks = client.pick_moments(transcript, meta.duration, anchors=anchors)
+    logger.info("LLM picked %d complementary moments", len(llm_picks))
+    if not llm_picks:
+        logger.info("LLM returned 0 complementary picks — anchors-only output")
+
     moments = merge_moments(anchors, llm_picks)
 
     if not moments:
-        logger.warning("No screenshot-worthy moments found (LLM + anchors).")
+        logger.warning("no anchors and no LLM picks — demo mode produced 0 keyframes")
         return []
 
     return select_frames_for_moments(

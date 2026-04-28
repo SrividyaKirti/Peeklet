@@ -421,7 +421,7 @@ def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
         output_dir=tmp_path,
     )
 
-    fake_client.pick_moments.assert_called_once_with(transcript, 60.0)
+    fake_client.pick_moments.assert_called_once_with(transcript, 60.0, anchors=[])
     assert len(results) == 1
     assert results[0].visual_context_goal == "c"
 
@@ -452,7 +452,7 @@ def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, c
         )
 
     assert results == []
-    assert any("screenshot-worthy moments" in rec.message for rec in caplog.records)
+    assert any("no anchors and no LLM picks" in rec.message for rec in caplog.records)
 
 
 # --- Regression tests for the demo-mode gallery-check bugs surfaced
@@ -1086,6 +1086,91 @@ def test_default_forward_search_window_is_10s():
 
     cfg = DemoFilterConfig()
     assert cfg.forward_search_window_max_sec == 10.0
+
+
+def test_apply_demo_filter_empty_anchors_runs_to_completion(tmp_path, monkeypatch):
+    """anchors=[] is valid; pipeline returns LLM-only output without raising."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import apply_demo_filter
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+
+    fake_moments = [
+        Moment(
+            timestamp=10.0,
+            visual_context_goal="llm-only",
+            textual_anchor="t",
+            downstream_utility="u",
+        )
+    ]
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = fake_moments
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._count_words_in_frame", lambda frame, downscale_dim: 0
+    )
+
+    # No transcript_text → anchors=[] path
+    results = apply_demo_filter(
+        decoder=decoder,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    # pick_moments must be called with empty anchors keyword arg
+    fake_client.pick_moments.assert_called_once_with(transcript, 60.0, anchors=[])
+    # Result contains exactly the one LLM pick (or is empty if Stage B gates it)
+    # — either is valid; the key guarantee is no exception was raised.
+    assert isinstance(results, list)
+    sources = {r.moment_source for r in results}
+    assert sources <= {"llm"}
+
+
+def test_apply_demo_filter_zero_moments_logs_warning_and_returns_empty(
+    tmp_path, monkeypatch, caplog
+):
+    """anchors=[] AND LLM returns [] — pipeline logs WARNING and returns []."""
+    import logging
+
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.demo_filter import apply_demo_filter
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = []
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
+
+    cfg = DemoFilterConfig(enabled=True)
+    with caplog.at_level(logging.WARNING):
+        results = apply_demo_filter(
+            decoder=decoder,
+            transcript=[],
+            config=cfg,
+            output_dir=tmp_path,
+            transcript_text="",  # explicitly no Fathom text → anchors=[]
+        )
+
+    assert results == []
+    assert any("no anchors and no LLM picks" in rec.message for rec in caplog.records)
 
 
 class TestPickBestContentIndex:
