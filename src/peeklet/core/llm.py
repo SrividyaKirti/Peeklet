@@ -102,6 +102,23 @@ def format_transcript_for_llm(segments: list[TranscriptSegment]) -> str:
     return "\n".join(lines)
 
 
+def format_anchors_for_llm(anchors: list[Moment]) -> str:
+    """Render the anchor list as ``[<seconds>] <label>`` lines.
+
+    Uses the same decimal-seconds format as :func:`format_transcript_for_llm`
+    so the LLM compares anchor timestamps and transcript timestamps in one
+    consistent unit. Empty input returns the sentinel string the prompt
+    expects when no anchors are present.
+    """
+    if not anchors:
+        return "None — no guaranteed anchors in this video."
+    lines: list[str] = []
+    for a in anchors:
+        label = a.visual_context_goal.strip() or "(unlabeled anchor)"
+        lines.append(f"[{a.timestamp:.1f}] {label}")
+    return "\n".join(lines)
+
+
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?|\n?```\s*$", re.MULTILINE)
 
 

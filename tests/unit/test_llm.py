@@ -488,3 +488,51 @@ def test_build_llm_client_openrouter_returns_openrouter_client(monkeypatch):
     client = build_llm_client(provider="openrouter", model="anthropic/claude-3.5-sonnet")
 
     assert isinstance(client, llm_openrouter.OpenRouterClient)
+
+
+def test_format_anchors_empty_list_returns_sentinel():
+    from peeklet.core.llm import format_anchors_for_llm
+
+    assert format_anchors_for_llm([]) == "None — no guaranteed anchors in this video."
+
+
+def test_format_anchors_renders_labels_with_decimal_seconds():
+    from peeklet.core.llm import format_anchors_for_llm
+    from peeklet.utils.types import Moment
+
+    anchors = [
+        Moment(
+            timestamp=12.5,
+            visual_context_goal="The risk-score modal",
+            textual_anchor="**ACTION ITEM: ...",
+            downstream_utility="...",
+            source="anchor",
+        ),
+        Moment(
+            timestamp=140.7,
+            visual_context_goal="The Tasks page filter dropdown",
+            textual_anchor="**ACTION ITEM: ...",
+            downstream_utility="...",
+            source="anchor",
+        ),
+    ]
+
+    rendered = format_anchors_for_llm(anchors)
+    assert rendered == ("[12.5] The risk-score modal\n[140.7] The Tasks page filter dropdown")
+
+
+def test_format_anchors_unlabeled_anchor_degrades():
+    from peeklet.core.llm import format_anchors_for_llm
+    from peeklet.utils.types import Moment
+
+    anchors = [
+        Moment(
+            timestamp=42.0,
+            visual_context_goal="",
+            textual_anchor="",
+            downstream_utility="",
+            source="anchor",
+        ),
+    ]
+
+    assert format_anchors_for_llm(anchors) == "[42.0] (unlabeled anchor)"
