@@ -206,7 +206,7 @@ def test_anthropic_client_pick_moments_calls_sdk_and_parses_response(monkeypatch
 
     client = llm_anthropic.AnthropicClient(model="claude-haiku-4-5")
     segments = _make_segments()
-    moments = client.pick_moments(segments, video_duration=60.0)
+    moments = client.pick_moments(segments, video_duration=60.0, anchors=[])
 
     assert moments == [
         Moment(
@@ -245,7 +245,7 @@ def test_anthropic_client_retries_once_on_unparseable(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     client = llm_anthropic.AnthropicClient(model="claude-haiku-4-5")
-    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+    moments = client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert len(moments) == 1
     assert fake_client.messages.create.call_count == 2
@@ -268,7 +268,7 @@ def test_anthropic_client_raises_after_two_unparseable(monkeypatch):
 
     client = llm_anthropic.AnthropicClient(model="claude-haiku-4-5")
     with pytest.raises(LLMResponseError):
-        client.pick_moments(_make_segments(), video_duration=60.0)
+        client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert fake_client.messages.create.call_count == 2
 
@@ -294,7 +294,7 @@ def test_openai_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     client = llm_openai.OpenAIClient(model="gpt-4o-mini")
-    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+    moments = client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert moments == [
         Moment(
@@ -347,7 +347,7 @@ def test_openai_client_retries_once_on_unparseable(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     client = llm_openai.OpenAIClient(model="gpt-4o-mini")
-    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+    moments = client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert len(moments) == 1
     assert fake_client.chat.completions.create.call_count == 2
@@ -403,7 +403,7 @@ def test_openrouter_client_pick_moments_calls_sdk_and_parses_response(monkeypatc
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
 
     client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
-    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+    moments = client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert moments == [
         Moment(
@@ -441,7 +441,7 @@ def test_openrouter_client_retries_once_on_unparseable(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
 
     client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
-    moments = client.pick_moments(_make_segments(), video_duration=60.0)
+    moments = client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert len(moments) == 1
     assert fake_client.chat.completions.create.call_count == 2
@@ -464,7 +464,7 @@ def test_openrouter_client_raises_after_two_unparseable(monkeypatch):
 
     client = llm_openrouter.OpenRouterClient(model="anthropic/claude-3.5-sonnet")
     with pytest.raises(LLMResponseError):
-        client.pick_moments(_make_segments(), video_duration=60.0)
+        client.pick_moments(_make_segments(), video_duration=60.0, anchors=[])
 
     assert fake_client.chat.completions.create.call_count == 2
 
@@ -550,3 +550,51 @@ def test_system_prompt_has_anchor_avoidance_and_placeholder():
     assert "Do NOT pick any moment within ±10 seconds" in SYSTEM_PROMPT
     assert "{anchor_list}" in SYSTEM_PROMPT
     assert "Silence is a valid answer" in SYSTEM_PROMPT
+
+
+def test_anthropic_client_injects_anchor_list_into_prompt(monkeypatch):
+    """Anchors are rendered into both the system prompt and the user message."""
+    import peeklet.core.llm_anthropic as la
+
+    captured: dict = {}
+
+    class _FakeMsg:
+        text = "[]"
+
+    class _FakeResponse:
+        content = [_FakeMsg()]
+
+    class _FakeMessages:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            return _FakeResponse()
+
+    class _FakeAnthropic:
+        def __init__(self, *a, **kw):
+            self.messages = _FakeMessages()
+
+    fake_module = type("M", (), {"Anthropic": _FakeAnthropic})()
+    monkeypatch.setattr(la, "anthropic", fake_module)
+
+    from peeklet.utils.types import Moment
+
+    client = la.AnthropicClient(model="claude-haiku-4-5")
+    anchors = [
+        Moment(
+            timestamp=12.5,
+            visual_context_goal="The risk-score modal",
+            textual_anchor="...",
+            downstream_utility="...",
+            source="anchor",
+        ),
+    ]
+    client.pick_moments(_make_segments(), video_duration=60.0, anchors=anchors)
+
+    sys_prompt = captured["system"]
+    assert "[12.5] The risk-score modal" in sys_prompt
+    assert "{anchor_list}" not in sys_prompt  # placeholder fully substituted
+
+    user = captured["messages"][0]["content"]
+    assert "## Anchor List (already covered" in user
+    assert "[12.5] The risk-score modal" in user

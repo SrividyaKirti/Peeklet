@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover - exercised when [demo] extra not instal
 def _call_openai_chat_with_retry(
     client: object,
     model: str,
+    system_prompt: str,
     user_message: str,
     video_duration: float,
     *,
@@ -47,7 +48,7 @@ def _call_openai_chat_with_retry(
         response = client.chat.completions.create(  # type: ignore[attr-defined]
             model=model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
         )
@@ -80,12 +81,25 @@ class OpenAIClient:
             self._client = openai.OpenAI()
 
     def pick_moments(
-        self, transcript: list[TranscriptSegment], video_duration: float
+        self,
+        transcript: list[TranscriptSegment],
+        video_duration: float,
+        anchors: list[Moment],
     ) -> list[Moment]:
-        user_message = format_transcript_for_llm(transcript)
+        from peeklet.core.llm import format_anchors_for_llm
+
+        anchor_list = format_anchors_for_llm(anchors)
+        system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
+        user_message = (
+            "## Transcript\n\n"
+            f"{format_transcript_for_llm(transcript)}\n\n"
+            "## Anchor List (already covered — do not pick at these)\n\n"
+            f"{anchor_list}"
+        )
         return _call_openai_chat_with_retry(
             client=self._client,
             model=self._model,
+            system_prompt=system_prompt,
             user_message=user_message,
             video_duration=video_duration,
             provider_label="OpenAI",

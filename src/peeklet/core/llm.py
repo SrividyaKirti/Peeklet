@@ -94,9 +94,17 @@ class LLMClient(Protocol):
     """Internal Protocol that every concrete LLM adapter implements."""
 
     def pick_moments(
-        self, transcript: list[TranscriptSegment], video_duration: float
+        self,
+        transcript: list[TranscriptSegment],
+        video_duration: float,
+        anchors: list[Moment],
     ) -> list[Moment]:
-        """Send the transcript to the LLM and return parsed moments."""
+        """Send the transcript + anchor list to the LLM and return parsed moments.
+
+        ``anchors`` is rendered into the system prompt's ``{anchor_list}``
+        placeholder and never an empty default — callers must pass an
+        explicit list (``[]`` is valid for non-Fathom videos).
+        """
         ...
 
 
