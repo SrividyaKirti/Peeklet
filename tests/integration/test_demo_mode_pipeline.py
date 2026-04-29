@@ -101,3 +101,58 @@ def test_demo_mode_end_to_end_with_fake_llm(
     md = (out_dir / "context.md").read_text()
     assert "Meeting Context:" in md
     assert "Visual Table of Contents" in md
+
+
+def test_pipeline_no_gap_fill_in_output(
+    synthetic_video: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """End-to-end: moment_source values are anchor or llm; never gap_fill."""
+    from peeklet.config import PeekletConfig
+    from peeklet.core import demo_filter as df_module
+    from peeklet.core.video import process_video
+    from peeklet.utils.types import Moment
+
+    video_path, transcript_path = synthetic_video
+
+    cfg = PeekletConfig()
+    cfg.exporter.output_dir = str(tmp_path / "out")
+    cfg.video.audio_detection = False
+    cfg.video.transcript_path = str(transcript_path)
+    cfg.demo_filter.enabled = True
+    cfg.demo_filter.gallery_min_words = 0
+
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = [
+        Moment(
+            timestamp=1.5,
+            visual_context_goal="first thing",
+            textual_anchor="speaker says here is the first thing",
+            downstream_utility="verify first screen",
+        ),
+        Moment(
+            timestamp=4.5,
+            visual_context_goal="second thing",
+            textual_anchor="speaker says now look at the second thing",
+            downstream_utility="verify second screen",
+        ),
+    ]
+    monkeypatch.setattr(df_module, "build_llm_client", lambda provider, model: fake_client)
+    monkeypatch.setattr(df_module, "pytesseract", MagicMock())
+    monkeypatch.setattr(df_module, "_is_low_info_frame", lambda frame, config: False)
+
+    _counter = {"n": 0}
+
+    def _unique_hash(_frame):
+        _counter["n"] += 1
+        return _counter["n"] * 0x0123456789ABCDEF & 0xFFFFFFFFFFFFFFFF
+
+    monkeypatch.setattr(df_module, "dhash_64", _unique_hash)
+
+    results = process_video(video_path, cfg)
+
+    assert len(results) >= 1
+    sources = {r.moment_source for r in results}
+    assert "gap_fill" not in sources
+    assert sources <= {"anchor", "llm"}

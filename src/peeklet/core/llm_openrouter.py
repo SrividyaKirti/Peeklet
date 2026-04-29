@@ -11,7 +11,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from peeklet.core.llm import format_transcript_for_llm
+from peeklet.core.llm import SYSTEM_PROMPT, format_transcript_for_llm
 from peeklet.core.llm_openai import _call_openai_chat_with_retry
 
 if TYPE_CHECKING:
@@ -50,12 +50,25 @@ class OpenRouterClient:
         )
 
     def pick_moments(
-        self, transcript: list[TranscriptSegment], video_duration: float
+        self,
+        transcript: list[TranscriptSegment],
+        video_duration: float,
+        anchors: list[Moment],
     ) -> list[Moment]:
-        user_message = format_transcript_for_llm(transcript)
+        from peeklet.core.llm import format_anchors_for_llm
+
+        anchor_list = format_anchors_for_llm(anchors)
+        system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
+        user_message = (
+            "## Transcript\n\n"
+            f"{format_transcript_for_llm(transcript)}\n\n"
+            "## Anchor List (already covered — do not pick at these)\n\n"
+            f"{anchor_list}"
+        )
         return _call_openai_chat_with_retry(
             client=self._client,
             model=self._model,
+            system_prompt=system_prompt,
             user_message=user_message,
             video_duration=video_duration,
             provider_label="OpenRouter",

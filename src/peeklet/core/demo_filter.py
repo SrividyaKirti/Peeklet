@@ -480,126 +480,44 @@ def _pick_frame_for_moment(
     return picked_frame, picked_ts, picked_frame_num, (win_start, win_end)
 
 
-def _fill_coverage_gaps(
-    decoder: VideoDecoder,
-    results: list[FrameResult],
-    transcript: list[TranscriptSegment],
-    config: DemoFilterConfig,
-    output_dir: Path,
-) -> list[FrameResult]:
-    """Inject synthetic ``gap_fill`` frames wherever consecutive keyframes
-    are more than ``max_seconds_between_keyframes`` apart.
-
-    Walks the sorted results; when a gap exceeds the threshold, builds a
-    synthetic :class:`Moment` at the midpoint and pushes it through the
-    same selection + low-info gates as LLM picks. If the gap-fill frame
-    is rejected (low-info or no segment), the gap is accepted — forcing
-    a bad frame would defeat the point of the low-info gate. Iterates
-    until no gaps remain or the safety cap is hit.
-    """
-    if config.max_seconds_between_keyframes <= 0.0 or len(results) < 2:
-        return results
-
-    max_gap = config.max_seconds_between_keyframes
-    meta = decoder.get_metadata()
-    filled = list(results)
-    skip_midpoints: set[float] = set()
-
-    # Cap iterations to bound work. An 18-minute gap at max_gap=120 needs
-    # ~9 fills; 50 is comfortably above any realistic meeting.
-    for _ in range(50):
-        filled.sort(key=lambda r: r.video_timestamp or 0.0)
-        inserted = False
-        for i in range(len(filled) - 1):
-            prev_ts = filled[i].video_timestamp or 0.0
-            next_ts = filled[i + 1].video_timestamp or 0.0
-            gap = next_ts - prev_ts
-            if gap <= max_gap:
-                continue
-            midpoint = round((prev_ts + next_ts) / 2.0, 3)
-            if midpoint in skip_midpoints:
-                continue
-            synthetic = Moment(
-                timestamp=midpoint,
-                visual_context_goal="Coverage gap fill",
-                textual_anchor="",
-                downstream_utility=("Maintain temporal coverage between triggered moments."),
-                source="gap_fill",
-            )
-            picked = _pick_frame_for_moment(decoder, synthetic, transcript, config)
-            if picked is None:
-                skip_midpoints.add(midpoint)
-                logger.info(
-                    "Gap fill at %.2fs rejected or unavailable; accepting gap.",
-                    midpoint,
-                )
-                continue
-            picked_frame, picked_ts, picked_frame_num, _win = picked
-            frame_id = f"demo_gapfill_{int(picked_ts * 1000):08d}ms"
-            asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
-            gap_ocr_text, gap_ocr_tokens = _ocr_text_and_tokens(
-                picked_frame, config.gallery_ocr_min_dim
-            )
-            filled.append(
-                FrameResult(
-                    frame_id=frame_id,
-                    event_type=EventType.KEYFRAME,
-                    is_keyframe=True,
-                    perceptual_hash="",
-                    frame_width=picked_frame.shape[1],
-                    frame_height=picked_frame.shape[0],
-                    source_format="video",
-                    asset_path=str(asset_path),
-                    trigger_type="transcript_trigger",
-                    source_video=meta.filename,
-                    video_timestamp=picked_ts,
-                    video_frame_number=picked_frame_num,
-                    video_duration=meta.duration,
-                    visual_context_goal=synthetic.visual_context_goal,
-                    textual_anchor=synthetic.textual_anchor,
-                    downstream_utility=synthetic.downstream_utility,
-                    moment_source="gap_fill",
-                    alignment_confidence="temporal_only",
-                    ocr_text=gap_ocr_text,
-                    ocr_tokens=sorted(gap_ocr_tokens),
-                )
-            )
-            inserted = True
-            break
-        if not inserted:
-            break
-
-    filled.sort(key=lambda r: r.video_timestamp or 0.0)
-    for i, r in enumerate(filled, start=1):
-        r.keyframe_index = i
-    return filled
-
-
 def merge_moments(
     anchors: list[Moment],
     llm_picks: list[Moment],
-    proximity_sec: float = 5.0,
+    warn_proximity_sec: float = 10.0,
 ) -> list[Moment]:
-    """Merge anchor and LLM-picked moments.
+    """Merge anchor and LLM-picked moments without dropping anything.
 
-    All anchors are kept unconditionally. LLM picks within
-    +/-proximity_sec of any anchor are dropped. Result is sorted
-    by timestamp.
+    Stage B's SSIM + pHash + low-info gates are the sole dedup mechanism;
+    time-proximity is a poor proxy for content similarity, so we surface
+    near-anchor picks as warnings instead of silently dropping them.
     """
     anchor_timestamps = [a.timestamp for a in anchors]
-    filtered_llm: list[Moment] = []
+    near_anchor = 0
     for pick in llm_picks:
-        if any(abs(pick.timestamp - at) <= proximity_sec for at in anchor_timestamps):
-            logger.info(
-                "LLM pick at %.2fs dropped — within %.1fs of an anchor",
+        nearest = min(
+            ((abs(pick.timestamp - at), at) for at in anchor_timestamps),
+            default=None,
+        )
+        if nearest is not None and nearest[0] <= warn_proximity_sec:
+            near_anchor += 1
+            logger.warning(
+                "LLM pick at %.2fs within %.1fs of anchor at %.2fs — kept, "
+                "but anchor proximity may produce a near-duplicate",
                 pick.timestamp,
-                proximity_sec,
+                nearest[0],
+                nearest[1],
             )
-            continue
-        filtered_llm.append(pick)
 
-    combined = list(anchors) + filtered_llm
+    combined = list(anchors) + list(llm_picks)
     combined.sort(key=lambda m: m.timestamp)
+    logger.info(
+        "merged %d moments: %d anchor, %d llm (%d of %d near-anchor)",
+        len(combined),
+        len(anchors),
+        len(llm_picks),
+        near_anchor,
+        len(llm_picks),
+    )
     return combined
 
 
@@ -758,8 +676,6 @@ def select_frames_for_moments(
             )
         )
 
-    results = _fill_coverage_gaps(decoder, results, transcript, config, output_dir)
-
     # Backfill total_keyframes
     for r in results:
         r.total_keyframes = len(results)
@@ -775,10 +691,9 @@ def apply_demo_filter(
 ) -> list[FrameResult]:
     """Top-level demo-mode entry point.
 
-    Builds the LLM client, asks it to pick screenshot-worthy moments from the
-    transcript, parses Fathom ACTION ITEM anchors from the raw transcript text,
-    merges anchors with LLM picks, then runs Stage B (forward-search + stability
-    + gallery check) to pick the actual frames.
+    Parses Fathom anchors from ``transcript_text`` first, asks the LLM to
+    pick complementary moments aware of those anchors, merges anchor and
+    LLM picks (warn-only), then runs Stage B to pick the actual frames.
     """
     from peeklet.core.audio import parse_fathom_anchors
 
@@ -791,17 +706,19 @@ def apply_demo_filter(
     meta = decoder.get_metadata()
     client = build_llm_client(provider=config.llm_provider, model=config.llm_model)
 
-    llm_picks = client.pick_moments(transcript, meta.duration)
-    logger.info("LLM picked %d screenshot-worthy moments", len(llm_picks))
-
     anchors = parse_fathom_anchors(transcript_text) if transcript_text else []
     if anchors:
         logger.info("Parsed %d ACTION ITEM anchors from transcript", len(anchors))
 
-    moments = merge_moments(anchors, llm_picks, proximity_sec=5.0)
+    llm_picks = client.pick_moments(transcript, meta.duration, anchors=anchors)
+    logger.info("LLM picked %d complementary moments", len(llm_picks))
+    if not llm_picks:
+        logger.info("LLM returned 0 complementary picks — anchors-only output")
+
+    moments = merge_moments(anchors, llm_picks)
 
     if not moments:
-        logger.warning("No screenshot-worthy moments found (LLM + anchors).")
+        logger.warning("no anchors and no LLM picks — demo mode produced 0 keyframes")
         return []
 
     return select_frames_for_moments(

@@ -23,53 +23,66 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = (
-    "You are a Video Content Analyst specializing in visual-textual "
-    "alignment for multimodal AI processing.\n\n"
+    "You are a Video Content Analyst specializing in visual-textual"
+    " alignment for multimodal AI processing.\n\n"
     "## Task\n\n"
-    "Analyze the provided meeting/demo transcript to identify specific "
-    "timestamps where a screenshot is essential for a downstream "
-    "Multimodal LLM (MLLM) to understand the technical context being "
-    "discussed.\n\n"
-    "## Selection Criteria\n\n"
-    "Identify a Key Moment whenever the speaker:\n"
-    "1. **Navigates to a new screen or dashboard** — e.g., "
-    '"Now, looking at the settings page..."\n'
-    "2. **References a specific UI element** — e.g., "
-    '"Note the red warning icon in the top right..."\n'
-    "3. **Completes a workflow step** — e.g., "
-    '"Once I click Deploy, you\'ll see the status change..."\n'
-    "4. **Points to data, tables, or graphs** — e.g., "
-    '"This spike in the chart represents..."\n'
-    '5. **Uses deictic expressions** ("this", "that", "here", '
-    '"there") referring to something visible on screen\n\n'
+    "Analyze the provided meeting/demo transcript to identify specific"
+    " timestamps where a screenshot is essential for a downstream"
+    " Multimodal LLM (MLLM) to understand the technical context being"
+    " discussed — BEYOND what is already covered by guaranteed anchor"
+    " moments (listed below).\n\n"
+    "## Guaranteed Anchors (do NOT pick at these)\n\n"
+    "The following moments are already captured by guaranteed anchors"
+    " from the meeting tool. Each anchor will produce its own screenshot"
+    " at the listed timestamp. Anchor timestamps are in **decimal"
+    " seconds**, the same unit used in the transcript above.\n\n"
+    "{anchor_list}\n\n"
+    "When picking your own moments:\n"
+    "- Do NOT pick any moment within ±10 seconds of a listed anchor"
+    " timestamp.\n"
+    "- Do NOT pick moments that would visually duplicate what an anchor"
+    " captures (e.g., if an anchor captures the Tasks page, do not pick"
+    " another moment of the Tasks page unless it has materially changed"
+    " — new modal, new data, scrolled region).\n\n"
+    "## Selection Criteria — Complementary Moments\n\n"
+    "In the transcript regions OUTSIDE the anchor windows, scan for"
+    " moments where the speaker references on-screen UI that is not yet"
+    " captured by an anchor. Prioritize:\n\n"
+    '1. **Deictic references to visible UI** — "this chart", "that'
+    ' banner", "look at the sidebar", "notice the risk score here".\n'
+    "2. **UI nouns** — tab, modal, dialog, graph, table, button, panel,"
+    " dropdown, sidebar, dashboard.\n"
+    '3. **Demo actions** — "let me click...", "if I navigate to...",'
+    ' "I\'ll open the settings...", "switching to the other tab".\n'
+    "4. **Named UI elements or data values** — a specific field name, a"
+    " specific column, a specific status/error/warning visible on"
+    " screen.\n\n"
+    "Pick one moment for each distinct UI subject the speaker names in"
+    " non-anchor regions. If the same UI subject is discussed multiple"
+    " times, pick the first occurrence after it appears on screen.\n\n"
     "## Timing Rules\n\n"
-    "- Place the timestamp **0.5-1.0 seconds after** the speaker begins "
-    "the triggering sentence, to allow the UI to finish loading or "
-    "animating.\n"
-    "- **Avoid selecting timestamps within 15 seconds of each other** "
-    "unless a major UI transition (new page, modal, or tab) occurs "
-    "between them.\n"
-    "- If the demo stays on one complex screen for an extended period, "
-    "one screenshot is usually enough. Only add a second if the speaker "
-    "references a different region or scrolls to new content.\n\n"
-    "## Action Item Anchors\n\n"
-    "Lines marked `ACTION ITEM` with `WATCH` links are high-priority "
-    "moments flagged by the meeting tool. You MUST include a moment at "
-    "or near each such timestamp. These represent confirmed points of "
-    "interest that a human reviewer has validated.\n\n"
+    "- Place the timestamp 0.5-1.0 seconds after the speaker begins the"
+    " triggering sentence.\n"
+    "- Avoid selecting timestamps within 15 seconds of another of your"
+    " own picks unless a major UI transition occurs (new page, modal,"
+    " tab).\n"
+    "- In regions of pure strategic discussion (no UI references), pick"
+    " nothing. Silence is a valid answer.\n\n"
     "## Output Format\n\n"
-    "Return ONLY a JSON array of objects. No preamble, no explanation.\n\n"
-    '[{"timestamp": 12.5, "visual_context_goal": "...", '
-    '"textual_anchor": "...", "downstream_utility": "..."}]\n\n'
+    "Return ONLY a JSON array of objects. No preamble, no explanation."
+    " If no complementary moments are warranted, return an empty"
+    " array [].\n\n"
+    '[{{"timestamp": 12.5, "visual_context_goal": "...",'
+    ' "textual_anchor": "...", "downstream_utility": "..."}}]\n\n'
     "Fields:\n"
-    "- **timestamp**: float, seconds into the video\n"
-    "- **visual_context_goal**: what the screenshot needs to capture "
-    '(e.g., "The configuration modal for API keys")\n'
-    "- **textual_anchor**: the exact transcript line that triggers this "
-    "need — quote the speaker\n"
-    "- **downstream_utility**: why the MLLM needs this image "
-    '(e.g., "To extract parameter values not mentioned in audio")\n\n'
-    "Pick as many or as few moments as the content needs."
+    "- timestamp: float, seconds into the video\n"
+    "- visual_context_goal: what the screenshot needs to capture"
+    ' (e.g., "The risk-score modal for a Terminal Run tool call")\n'
+    "- textual_anchor: the exact transcript line that triggers this"
+    " need — quote the speaker\n"
+    "- downstream_utility: why the MLLM needs this image"
+    ' (e.g., "To extract the risk classification not mentioned in'
+    ' audio")\n'
 )
 
 
@@ -81,9 +94,17 @@ class LLMClient(Protocol):
     """Internal Protocol that every concrete LLM adapter implements."""
 
     def pick_moments(
-        self, transcript: list[TranscriptSegment], video_duration: float
+        self,
+        transcript: list[TranscriptSegment],
+        video_duration: float,
+        anchors: list[Moment],
     ) -> list[Moment]:
-        """Send the transcript to the LLM and return parsed moments."""
+        """Send the transcript + anchor list to the LLM and return parsed moments.
+
+        ``anchors`` is rendered into the system prompt's ``{anchor_list}``
+        placeholder and never an empty default — callers must pass an
+        explicit list (``[]`` is valid for non-Fathom videos).
+        """
         ...
 
 
@@ -99,6 +120,23 @@ def format_transcript_for_llm(segments: list[TranscriptSegment]) -> str:
             lines.append(f"{prefix} **{s.speaker}**: {s.text}")
         else:
             lines.append(f"{prefix} {s.text}")
+    return "\n".join(lines)
+
+
+def format_anchors_for_llm(anchors: list[Moment]) -> str:
+    """Render the anchor list as ``[<seconds>] <label>`` lines.
+
+    Uses the same decimal-seconds format as :func:`format_transcript_for_llm`
+    so the LLM compares anchor timestamps and transcript timestamps in one
+    consistent unit. Empty input returns the sentinel string the prompt
+    expects when no anchors are present.
+    """
+    if not anchors:
+        return "None — no guaranteed anchors in this video."
+    lines: list[str] = []
+    for a in anchors:
+        label = a.visual_context_goal.strip() or "(unlabeled anchor)"
+        lines.append(f"[{a.timestamp:.1f}] {label}")
     return "\n".join(lines)
 
 

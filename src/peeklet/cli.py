@@ -213,21 +213,14 @@ def main(
 
 def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> None:
     """Process video file(s)."""
-    from peeklet.core.audio import parse_transcript
     from peeklet.core.exporter import ManifestWriter
-    from peeklet.core.transcript_trigger import detect_triggers
     from peeklet.core.video import process_video
 
-    # Detect transcript triggers if transcript is provided.
-    # Skip in demo mode — the demo pipeline picks moments from the LLM,
-    # not from keyword heuristics, and ignores forced_timestamps anyway.
+    # Non-demo --transcript is a no-op for screenshot triggering: the
+    # keyword-trigger lexicon migrated into the demo-mode LLM prompt and
+    # the dedicated module was retired. The transcript is still read for
+    # context emission downstream when demo mode is on.
     forced_timestamps: list[float] = []
-    if config.video.transcript_path and not config.demo_filter.enabled:
-        segments = parse_transcript(Path(config.video.transcript_path))
-        triggers = detect_triggers(segments)
-        forced_timestamps = [t.timestamp for t in triggers]
-        if triggers:
-            click.echo(f"Found {len(triggers)} transcript trigger(s)")
 
     if input_path.is_file():
         video_files = [input_path]

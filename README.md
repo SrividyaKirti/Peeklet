@@ -95,9 +95,12 @@ Demo mode runs two stages:
 - Parse the transcript. Extract Fathom `ACTION ITEM ... [WATCH](...)` markers
   as *anchors* (guaranteed captures — these are human-validated product
   moments).
-- Ask the LLM to pick additional screenshot-worthy moments from the rest of
-  the transcript.
-- Merge: all anchors are kept; LLM picks within 5s of an anchor are dropped.
+- Ask the LLM to pick *complementary* moments outside ±10s of any anchor —
+  the prompt renders the anchor list so the model knows what's already
+  guaranteed and avoids visually duplicating those frames.
+- Merge: anchors and LLM picks are both kept. Near-anchor LLM picks emit a
+  warning but are not dropped; Stage B's SSIM + pHash dedup is the sole
+  near-duplicate gate.
 
 **Stage B — frame selection.**
 For each moment, Peeklet does not trust the exact timestamp. Instead it:
@@ -110,12 +113,9 @@ For each moment, Peeklet does not trust the exact timestamp. Instead it:
   all be low before a frame is dropped.
 - Checks caption/image alignment — the picked frame's OCR tokens should
   overlap the moment's caption; widens the window once if not.
-- Deduplicates against the previously saved keyframe using OCR-token
-  Jaccard (robust to pixel noise in screen recordings); falls back to
-  dHash Hamming when either frame has too few OCR tokens.
-- Fills coverage gaps: when consecutive kept keyframes are more than
-  `max_seconds_between_keyframes` apart (default 120s), injects a
-  synthetic midpoint frame through the same selection gates.
+- Deduplicates against the previously saved keyframe using SSIM, with a
+  64-bit dHash backstop (`phash_hamming_threshold`) for near-duplicates
+  SSIM misses.
 
 See `docs/superpowers/specs/2026-04-09-transcript-driven-demo-mode-design.md`
 for the full algorithm.
@@ -223,10 +223,8 @@ demo_filter:
   forward_search_step_sec: 0.5
   search_window_lookback_sec: 3.0
   gallery_ocr_min_dim: 1920
-  dedup_jaccard_threshold: 0.95
-  dhash_hamming_threshold: 5
-  min_ocr_tokens_for_jaccard: 5
-  max_seconds_between_keyframes: 120.0
+  dedup_ssim_threshold: 0.95
+  phash_hamming_threshold: 5
   tail_skip_ratio: 0.02
 
 video:
@@ -253,7 +251,6 @@ src/peeklet/
     demo_filter.py        # Stage A/B: moment picking + frame selection
     context_exporter.py   # writes context.md / context.json
     audio.py              # Fathom md / SRT / VTT parsing + anchor extraction
-    transcript_trigger.py # keyword-based forced keyframes (non-demo mode)
     llm.py                # LLM adapter Protocol + JSON parser
     llm_anthropic.py
     llm_openai.py

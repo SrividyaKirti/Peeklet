@@ -421,7 +421,7 @@ def test_apply_demo_filter_calls_llm_then_select(tmp_path, monkeypatch):
         output_dir=tmp_path,
     )
 
-    fake_client.pick_moments.assert_called_once_with(transcript, 60.0)
+    fake_client.pick_moments.assert_called_once_with(transcript, 60.0, anchors=[])
     assert len(results) == 1
     assert results[0].visual_context_goal == "c"
 
@@ -452,7 +452,7 @@ def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, c
         )
 
     assert results == []
-    assert any("screenshot-worthy moments" in rec.message for rec in caplog.records)
+    assert any("no anchors and no LLM picks" in rec.message for rec in caplog.records)
 
 
 # --- Regression tests for the demo-mode gallery-check bugs surfaced
@@ -901,82 +901,121 @@ def test_anchor_moment_skips_tail_skip(tmp_path, monkeypatch):
 
 
 class TestMergeMoments:
-    def test_anchors_kept_llm_near_anchor_dropped(self):
+    def test_merge_moments_keeps_all_anchors_and_picks(self, caplog):
+        """Pure two-tier: nothing is dropped; warnings surface near-anchor picks."""
+        import logging
+
         from peeklet.core.demo_filter import merge_moments
         from peeklet.utils.types import Moment
 
         anchors = [
             Moment(
-                timestamp=232.0,
-                visual_context_goal="a",
-                textual_anchor="t",
-                downstream_utility="u",
+                timestamp=10.0,
+                visual_context_goal="A",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+            Moment(
+                timestamp=50.0,
+                visual_context_goal="B",
+                textual_anchor="",
+                downstream_utility="",
                 source="anchor",
             ),
         ]
         llm_picks = [
             Moment(
-                timestamp=230.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+                timestamp=12.0,
+                visual_context_goal="near A",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
             ),
             Moment(
-                timestamp=500.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
+                timestamp=30.0,
+                visual_context_goal="far",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
             ),
         ]
-        merged = merge_moments(anchors, llm_picks, proximity_sec=5.0)
-        assert len(merged) == 2
-        assert merged[0].timestamp == 232.0
-        assert merged[0].source == "anchor"
-        assert merged[1].timestamp == 500.0
-        assert merged[1].source == "llm"
+        with caplog.at_level(logging.WARNING):
+            merged = merge_moments(anchors, llm_picks)
 
-    def test_all_anchors_kept_when_no_llm_picks(self):
+        assert [m.timestamp for m in merged] == [10.0, 12.0, 30.0, 50.0]
+        # The 12.0 pick is within ±10s of the 10.0 anchor — must warn but not drop.
+        assert any("12.0" in r.message and "10.0" in r.message for r in caplog.records)
+
+    def test_merge_moments_sorts_by_timestamp(self):
         from peeklet.core.demo_filter import merge_moments
         from peeklet.utils.types import Moment
 
         anchors = [
             Moment(
-                timestamp=100.0,
-                visual_context_goal="a",
-                textual_anchor="t",
-                downstream_utility="u",
-                source="anchor",
-            ),
-            Moment(
-                timestamp=200.0,
-                visual_context_goal="b",
-                textual_anchor="t",
-                downstream_utility="u",
-                source="anchor",
-            ),
-        ]
-        merged = merge_moments(anchors, [], proximity_sec=5.0)
-        assert len(merged) == 2
-
-    def test_sorted_by_timestamp(self):
-        from peeklet.core.demo_filter import merge_moments
-        from peeklet.utils.types import Moment
-
-        anchors = [
-            Moment(
-                timestamp=500.0,
-                visual_context_goal="a",
-                textual_anchor="t",
-                downstream_utility="u",
+                timestamp=50.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
                 source="anchor",
             ),
         ]
         llm_picks = [
             Moment(
-                timestamp=100.0, visual_context_goal="b", textual_anchor="t", downstream_utility="u"
+                timestamp=10.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+            Moment(
+                timestamp=30.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
             ),
         ]
-        merged = merge_moments(anchors, llm_picks, proximity_sec=5.0)
-        assert [m.timestamp for m in merged] == [100.0, 500.0]
+        merged = merge_moments(anchors, llm_picks)
+        assert [m.timestamp for m in merged] == [10.0, 30.0, 50.0]
 
-    def test_empty_inputs(self):
+    def test_merge_moments_handles_empty_inputs(self):
         from peeklet.core.demo_filter import merge_moments
 
-        assert merge_moments([], [], proximity_sec=5.0) == []
+        assert merge_moments([], []) == []
+
+    def test_merge_moments_logs_summary(self, caplog):
+        """INFO-level summary logged on every call."""
+        import logging
+
+        from peeklet.core.demo_filter import merge_moments
+        from peeklet.utils.types import Moment
+
+        anchors = [
+            Moment(
+                timestamp=10.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="anchor",
+            ),
+        ]
+        llm_picks = [
+            Moment(
+                timestamp=30.0,
+                visual_context_goal="",
+                textual_anchor="",
+                downstream_utility="",
+                source="llm",
+            ),
+        ]
+        with caplog.at_level(logging.INFO):
+            merge_moments(anchors, llm_picks)
+
+        assert any(
+            "merged 2 moments" in r.message and "1 anchor" in r.message and "1 llm" in r.message
+            for r in caplog.records
+        )
 
 
 def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
@@ -1002,7 +1041,7 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
     fake_llm_moments = [
         Moment(
             timestamp=231.0, visual_context_goal="c", textual_anchor="t", downstream_utility="u"
-        ),  # within 5s of anchor → dropped
+        ),  # within 5s of anchor → kept (Stage B dedup gates handle near-duplicates)
         Moment(
             timestamp=500.0,
             visual_context_goal="far away",
@@ -1035,8 +1074,8 @@ def test_apply_demo_filter_merges_anchors_with_llm_picks(tmp_path, monkeypatch):
         transcript_text=raw_text,
     )
 
-    # Should have anchor at 232 + llm pick at 500 = 2 results
-    assert len(results) == 2
+    # Should have anchor at 232 + llm pick at 231 + llm pick at 500 = 3 results
+    assert len(results) == 3
     sources = [r.moment_source for r in results]
     assert "anchor" in sources
     assert "llm" in sources
@@ -1047,6 +1086,97 @@ def test_default_forward_search_window_is_10s():
 
     cfg = DemoFilterConfig()
     assert cfg.forward_search_window_max_sec == 10.0
+
+
+def test_apply_demo_filter_empty_anchors_runs_to_completion(tmp_path, monkeypatch):
+    """anchors=[] is valid; pipeline returns LLM-only output without raising."""
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.audio import TranscriptSegment
+    from peeklet.core.demo_filter import apply_demo_filter
+    from peeklet.utils.types import Moment
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    transcript = [TranscriptSegment(start=8.0, end=12.0, text="speaking")]
+    cfg = DemoFilterConfig(enabled=True, gallery_min_words=0)
+
+    fake_moments = [
+        Moment(
+            timestamp=10.0,
+            visual_context_goal="llm-only",
+            textual_anchor="t",
+            downstream_utility="u",
+        )
+    ]
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = fake_moments
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.save_keyframe",
+        lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
+    )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter._count_words_in_frame", lambda frame, downscale_dim: 0
+    )
+    import os
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.dhash_64",
+        lambda _frame: int.from_bytes(os.urandom(8), "big"),
+    )
+
+    # No transcript_text → anchors=[] path
+    results = apply_demo_filter(
+        decoder=decoder,
+        transcript=transcript,
+        config=cfg,
+        output_dir=tmp_path,
+    )
+
+    # pick_moments must be called with empty anchors keyword arg
+    fake_client.pick_moments.assert_called_once_with(transcript, 60.0, anchors=[])
+    # The LLM-only path must emit at least one keyframe; the set is exactly
+    # {"llm"} — no anchors, no gap_fill.
+    assert len(results) >= 1
+    sources = {r.moment_source for r in results}
+    assert sources == {"llm"}
+
+
+def test_apply_demo_filter_zero_moments_logs_warning_and_returns_empty(
+    tmp_path, monkeypatch, caplog
+):
+    """anchors=[] AND LLM returns [] — pipeline logs WARNING and returns []."""
+    import logging
+
+    from peeklet.config import DemoFilterConfig
+    from peeklet.core.demo_filter import apply_demo_filter
+
+    decoder = _make_decoder_for_moments(meta_duration=60.0)
+    fake_client = MagicMock()
+    fake_client.pick_moments.return_value = []
+
+    monkeypatch.setattr(
+        "peeklet.core.demo_filter.build_llm_client",
+        lambda provider, model: fake_client,
+    )
+    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
+
+    cfg = DemoFilterConfig(enabled=True)
+    with caplog.at_level(logging.WARNING):
+        results = apply_demo_filter(
+            decoder=decoder,
+            transcript=[],
+            config=cfg,
+            output_dir=tmp_path,
+            transcript_text="",  # explicitly no Fathom text → anchors=[]
+        )
+
+    assert results == []
+    assert any("no anchors and no LLM picks" in rec.message for rec in caplog.records)
 
 
 class TestPickBestContentIndex:
@@ -1401,194 +1531,6 @@ class TestPhashDedup:
         assert len(results) == 2
 
 
-class TestGapFill:
-    """Coverage-gap closer — injects synthetic gap_fill moments when the
-    distance between consecutive kept keyframes exceeds the configured
-    maximum."""
-
-    def test_gap_fill_inserts_midpoint_frame_when_gap_exceeds_max(self, tmp_path, monkeypatch):
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.core.demo_filter import select_frames_for_moments
-        from peeklet.utils.types import Moment
-
-        decoder = _make_decoder_for_moments(meta_duration=600.0)
-
-        # Each extracted frame is visually unique so SSIM / phash dedup
-        # never trips, and low-info is patched off by the autouse fixture.
-        def _extract(ts: float):
-            val = int((ts * 7) % 256)
-            return (
-                np.full((100, 100, 3), val, dtype=np.uint8),
-                float(ts),
-                int(ts * 30),
-            )
-
-        decoder.extract_frame_at.side_effect = _extract
-        _patch_save_keyframe(monkeypatch, tmp_path)
-
-        # Two real moments 300s apart; max gap is 120s so at least one
-        # gap_fill must be injected between them.
-        moments = [
-            Moment(
-                timestamp=50.0,
-                visual_context_goal="first",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-            Moment(
-                timestamp=350.0,
-                visual_context_goal="second",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-        ]
-        transcript = [
-            TranscriptSegment(start=0.0, end=600.0, text="long discussion"),
-        ]
-        cfg = DemoFilterConfig(
-            enabled=True,
-            gallery_min_words=0,
-            dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
-            max_seconds_between_keyframes=120.0,
-        )
-
-        results = select_frames_for_moments(
-            decoder=decoder,
-            moments=moments,
-            transcript=transcript,
-            config=cfg,
-            output_dir=tmp_path,
-        )
-
-        sources = [r.moment_source for r in results]
-        assert "gap_fill" in sources, f"expected gap_fill in {sources}"
-        timestamps = sorted(r.video_timestamp or 0.0 for r in results)
-        for a, b in zip(timestamps, timestamps[1:], strict=False):
-            assert (b - a) <= 120.0 + 1e-6, f"gap {b - a:.1f}s exceeds max"
-
-    def test_gap_fill_disabled_when_threshold_is_zero(self, tmp_path, monkeypatch):
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.core.demo_filter import select_frames_for_moments
-        from peeklet.utils.types import Moment
-
-        decoder = _make_decoder_for_moments(meta_duration=600.0)
-
-        def _extract(ts: float):
-            val = int((ts * 7) % 256)
-            return (
-                np.full((100, 100, 3), val, dtype=np.uint8),
-                float(ts),
-                int(ts * 30),
-            )
-
-        decoder.extract_frame_at.side_effect = _extract
-        _patch_save_keyframe(monkeypatch, tmp_path)
-
-        moments = [
-            Moment(
-                timestamp=50.0,
-                visual_context_goal="first",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-            Moment(
-                timestamp=350.0,
-                visual_context_goal="second",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-        ]
-        transcript = [TranscriptSegment(start=0.0, end=600.0, text="long")]
-        cfg = DemoFilterConfig(
-            enabled=True,
-            gallery_min_words=0,
-            dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
-            max_seconds_between_keyframes=0.0,
-        )
-
-        results = select_frames_for_moments(
-            decoder=decoder,
-            moments=moments,
-            transcript=transcript,
-            config=cfg,
-            output_dir=tmp_path,
-        )
-
-        assert len(results) == 2
-        assert all(r.moment_source != "gap_fill" for r in results)
-
-    def test_gap_fill_accepts_gap_when_midpoint_is_low_info(self, tmp_path, monkeypatch):
-        """If the midpoint frame fails the low-info gate, the gap is
-        accepted rather than forcing a bad frame."""
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core import demo_filter
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.utils.types import Moment
-
-        decoder = _make_decoder_for_moments(meta_duration=600.0)
-
-        def _extract(ts: float):
-            val = int((ts * 7) % 256)
-            return (
-                np.full((100, 100, 3), val, dtype=np.uint8),
-                float(ts),
-                int(ts * 30),
-            )
-
-        decoder.extract_frame_at.side_effect = _extract
-        _patch_save_keyframe(monkeypatch, tmp_path)
-
-        # Reject only gap_fill midpoints (around ts=200). The two real
-        # moments at 50 and 350 sit safely outside that range.
-        def _reject_midpoint(frame, config):
-            # Synthetic frames encode ts in the fill value ((ts*7)%256).
-            # ts=200 → val = 1400 % 256 = 120. Reject just that.
-            return int(frame[0, 0, 0]) == 120
-
-        monkeypatch.setattr(demo_filter, "_is_low_info_frame", _reject_midpoint)
-
-        moments = [
-            Moment(
-                timestamp=50.0,
-                visual_context_goal="first",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-            Moment(
-                timestamp=350.0,
-                visual_context_goal="second",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-        ]
-        transcript = [TranscriptSegment(start=0.0, end=600.0, text="long")]
-        cfg = DemoFilterConfig(
-            enabled=True,
-            gallery_min_words=0,
-            dedup_ssim_threshold=1.0,
-            phash_hamming_threshold=0,
-            max_seconds_between_keyframes=120.0,
-        )
-
-        results = demo_filter.select_frames_for_moments(
-            decoder=decoder,
-            moments=moments,
-            transcript=transcript,
-            config=cfg,
-            output_dir=tmp_path,
-        )
-
-        # Both real moments survive (they're derived from llm moments,
-        # not gap_fill), and the pipeline does not crash when a gap_fill
-        # candidate is rejected at a specific midpoint.
-        llm_sources = [r for r in results if r.moment_source == "llm"]
-        assert len(llm_sources) == 2
-
-
 class TestNormalizeTokens:
     def test_lowercases_and_drops_stopwords(self):
         from peeklet.core.demo_filter import _normalize_tokens
@@ -1630,7 +1572,6 @@ class TestCaptionImageAlignment:
             gallery_min_words=0,
             dedup_ssim_threshold=1.0,
             phash_hamming_threshold=0,
-            max_seconds_between_keyframes=0.0,
         )
         defaults.update(overrides)
         return DemoFilterConfig(**defaults)
@@ -1795,53 +1736,6 @@ class TestCaptionImageAlignment:
 
         assert len(results) == 1
         assert results[0].alignment_confidence == "content"
-
-    def test_gap_fill_frames_are_temporal_only(self, tmp_path, monkeypatch):
-        from peeklet.core import demo_filter
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.utils.types import Moment
-
-        decoder = _make_decoder_for_moments(meta_duration=600.0)
-        monkeypatch.setattr(
-            demo_filter,
-            "save_keyframe",
-            lambda frame, output_dir, frame_id, fmt="jpg": tmp_path / f"{frame_id}.jpg",
-        )
-        monkeypatch.setattr(
-            demo_filter,
-            "_ocr_text_and_tokens",
-            lambda frame, downscale_dim: ("invoice dashboard", {"invoice", "dashboard"}),
-        )
-
-        moments = [
-            Moment(
-                timestamp=10.0,
-                visual_context_goal="Invoice dashboard",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-            Moment(
-                timestamp=400.0,
-                visual_context_goal="Invoice dashboard",
-                textual_anchor="t",
-                downstream_utility="u",
-            ),
-        ]
-        transcript = [TranscriptSegment(start=0.0, end=500.0, text="x")]
-        cfg = self._make_config(max_seconds_between_keyframes=120.0)
-
-        results = demo_filter.select_frames_for_moments(
-            decoder=decoder,
-            moments=moments,
-            transcript=transcript,
-            config=cfg,
-            output_dir=tmp_path,
-        )
-
-        gap_fills = [r for r in results if r.moment_source == "gap_fill"]
-        assert gap_fills, "expected at least one gap-fill frame"
-        for r in gap_fills:
-            assert r.alignment_confidence == "temporal_only"
 
     def test_frame_results_carry_ocr_text_and_tokens(self, tmp_path, monkeypatch):
         from peeklet.core import demo_filter

@@ -133,12 +133,6 @@ class DemoFilterConfig(BaseModel):
     # is <= this value. 0 means exact-match only; 64 disables dedup. Runs
     # after dedup_ssim_threshold as a backstop for near-duplicates SSIM missed.
     phash_hamming_threshold: int = Field(default=5, ge=0, le=64)
-    # --- Coverage gap closer (PR C) ---
-    # Maximum allowed gap between consecutive kept keyframes, in seconds.
-    # When a longer gap is detected after frame selection, a synthetic
-    # ``gap_fill`` moment is injected at the midpoint and re-run through
-    # the normal selection + low-info gates. 0.0 disables gap filling.
-    max_seconds_between_keyframes: float = Field(default=120.0, ge=0.0)
     # How far before each moment's timestamp the search window starts.
     # Product-review speakers typically reference a UI element *before*
     # naming the action, so biasing the window backward captures the

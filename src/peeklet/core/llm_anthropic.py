@@ -40,15 +40,27 @@ class AnthropicClient:
         self._client = anthropic.Anthropic()
 
     def pick_moments(
-        self, transcript: list[TranscriptSegment], video_duration: float
+        self,
+        transcript: list[TranscriptSegment],
+        video_duration: float,
+        anchors: list[Moment],
     ) -> list[Moment]:
-        user_message = format_transcript_for_llm(transcript)
+        from peeklet.core.llm import format_anchors_for_llm
+
+        anchor_list = format_anchors_for_llm(anchors)
+        system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
+        user_message = (
+            "## Transcript\n\n"
+            f"{format_transcript_for_llm(transcript)}\n\n"
+            "## Anchor List (already covered — do not pick at these)\n\n"
+            f"{anchor_list}"
+        )
 
         for attempt in (1, 2):
             response = self._client.messages.create(
                 model=self._model,
                 max_tokens=_MAX_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
             raw = "".join(block.text for block in response.content if hasattr(block, "text"))
