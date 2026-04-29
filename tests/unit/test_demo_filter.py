@@ -1572,7 +1572,6 @@ class TestCaptionImageAlignment:
             gallery_min_words=0,
             dedup_ssim_threshold=1.0,
             phash_hamming_threshold=0,
-            max_seconds_between_keyframes=0.0,
         )
         defaults.update(overrides)
         return DemoFilterConfig(**defaults)
