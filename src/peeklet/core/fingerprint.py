@@ -75,6 +75,10 @@ class _BoxLike(Protocol):
 _TOP_BAND_FRACTION = 0.05
 _HEADING_TOP_FRACTION = 0.5
 _SIDEBAR_LEFT_FRACTION = 0.15
+# Spec says "largest font cluster"; this is the operational definition —
+# any box within 25% of the tallest box's height is "in the cluster".
+# Adjustable without touching extraction logic.
+_HEADING_FONT_CLUSTER_TOLERANCE = 0.75
 _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 
 
@@ -84,13 +88,13 @@ def extract_url(
     frame_w: int,
 ) -> str:
     """Return the first URL-pattern token whose box falls in the top 5% of the frame."""
-    band = int(frame_h * _TOP_BAND_FRACTION)
+    band = frame_h * _TOP_BAND_FRACTION
     for b in boxes:
         if b.y + b.h > band:
             continue
-        if _URL_RE.search(b.text):
-            match = _URL_RE.search(b.text)
-            return _normalize_url(match.group(0)) if match else ""
+        match = _URL_RE.search(b.text)
+        if match:
+            return _normalize_url(match.group(0))
     return ""
 
 
@@ -113,7 +117,7 @@ def extract_heading(
     max_h = max(b.h for b in candidates)
     if max_h <= 0:
         return ""
-    cluster = [b for b in candidates if b.h >= max_h * 0.75]
+    cluster = [b for b in candidates if b.h >= max_h * _HEADING_FONT_CLUSTER_TOLERANCE]
     cluster.sort(key=lambda b: (-len(b.text), b.x))
     return _normalize_text(cluster[0].text)
 

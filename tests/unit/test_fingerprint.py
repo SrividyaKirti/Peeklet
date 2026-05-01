@@ -79,6 +79,13 @@ def test_extract_url_ignores_url_outside_top_band():
     assert extract_url(boxes, frame_h=1000, frame_w=1600) == ""
 
 
+def test_extract_url_runs_normalize_url_on_match():
+    from peeklet.core.fingerprint import extract_url
+
+    boxes = [WB("HTTPS://Example.COM/PATH?q=1", x=10, y=10, w=200, h=18)]
+    assert extract_url(boxes, frame_h=1000, frame_w=1600) == "https://example.com/path"
+
+
 def test_extract_heading_picks_longest_large_font_in_top_half():
     from peeklet.core.fingerprint import extract_heading
 
