@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from peeklet.core.fingerprint import Fingerprint
+
 
 class EventType(Enum):
     """Whether a frame was kept as a keyframe or skipped."""
@@ -99,3 +101,29 @@ class FrameResult:
     alignment_confidence: Literal["content", "temporal_only"] | None = None
     ocr_text: str | None = None
     ocr_tokens: list[str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Screen:
+    """A unique screen captured by the demo dedup pipeline.
+
+    One ``Screen`` per saved image on disk. Multiple ``MomentEntry``
+    rows can reference the same ``screen_id``.
+    """
+
+    screen_id: str
+    image_path: str
+    first_seen_ms: int
+    fingerprint: Fingerprint
+    ocr_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class MomentEntry:
+    """A demo moment with a screen reference (or unavailable marker)."""
+
+    timestamp_ms: int
+    caption: str
+    type: str  # "action_item" | "llm"
+    screen_id: str | None
+    image_unavailable: bool

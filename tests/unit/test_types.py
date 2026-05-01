@@ -214,3 +214,55 @@ def test_frame_result_demo_fields_default_none():
     assert r.textual_anchor is None
     assert r.downstream_utility is None
     assert r.moment_source is None
+
+
+def test_screen_dataclass_holds_required_fields():
+    from peeklet.core.fingerprint import Fingerprint
+    from peeklet.utils.types import Screen
+
+    fp = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0)
+    screen = Screen(
+        screen_id="screen_001",
+        image_path="demo_0001_00057433ms.jpg",
+        first_seen_ms=57433,
+        fingerprint=fp,
+        ocr_text="raw OCR text",
+    )
+    assert screen.screen_id == "screen_001"
+    assert screen.first_seen_ms == 57433
+    assert screen.fingerprint is fp
+
+
+def test_moment_entry_holds_required_fields():
+    from peeklet.utils.types import MomentEntry
+
+    m = MomentEntry(
+        timestamp_ms=132033,
+        caption="Vidya configures Bug filter",
+        type="action_item",
+        screen_id="screen_007",
+        image_unavailable=False,
+    )
+    assert m.timestamp_ms == 132033
+    assert m.screen_id == "screen_007"
+    assert m.image_unavailable is False
+
+
+def test_moment_entry_image_unavailable_implies_screen_id_none():
+    """The dedup pipeline emits screen_id=None when image_unavailable is True.
+
+    The dataclass itself does not enforce this — it's an output-pipeline
+    invariant — but exercise the documented combination so future
+    refactors keep it intact.
+    """
+    from peeklet.utils.types import MomentEntry
+
+    m = MomentEntry(
+        timestamp_ms=1000,
+        caption="quality gate failed",
+        type="action_item",
+        screen_id=None,
+        image_unavailable=True,
+    )
+    assert m.screen_id is None
+    assert m.image_unavailable is True
