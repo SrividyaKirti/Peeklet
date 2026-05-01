@@ -123,3 +123,53 @@ def test_extract_sidebar_returns_empty_when_no_left_text():
 
     boxes = [WB("Centered", x=800, y=300, w=200, h=20)]
     assert extract_sidebar_text(boxes, frame_h=1000, frame_w=1600) == ""
+
+
+def test_compute_part_b_identical_frames_have_zero_distance():
+    from peeklet.core.fingerprint import compute_part_b, hamming_distance_64
+
+    frame = np.random.default_rng(seed=1).integers(0, 256, (1000, 1600, 3), dtype=np.uint8)
+    h1 = compute_part_b(frame)
+    h2 = compute_part_b(frame.copy())
+    assert hamming_distance_64(h1, h2) == 0
+
+
+def test_compute_part_b_random_frames_have_large_distance():
+    from peeklet.core.fingerprint import compute_part_b, hamming_distance_64
+
+    rng = np.random.default_rng(seed=42)
+    f1 = rng.integers(0, 256, (1000, 1600, 3), dtype=np.uint8)
+    f2 = rng.integers(0, 256, (1000, 1600, 3), dtype=np.uint8)
+    assert hamming_distance_64(compute_part_b(f1), compute_part_b(f2)) > 10
+
+
+def test_compute_part_b_returns_64_bit_int():
+    from peeklet.core.fingerprint import compute_part_b
+
+    frame = np.zeros((1000, 1600, 3), dtype=np.uint8)
+    h = compute_part_b(frame)
+    assert isinstance(h, int)
+    assert 0 <= h < (1 << 64)
+
+
+def test_compute_part_b_uses_only_header_strip():
+    """Pixels outside the header strip should not influence the hash."""
+    from peeklet.core.fingerprint import compute_part_b, hamming_distance_64
+
+    h, w = 1000, 1600
+    base = np.zeros((h, w, 3), dtype=np.uint8)
+    # paint the header strip identically in both frames
+    base[int(h * 0.08) : int(h * 0.22), :] = 128
+    a = base.copy()
+    b = base.copy()
+    # Differ only OUTSIDE the header strip
+    b[int(h * 0.30) : int(h * 0.90), :] = 255
+    assert hamming_distance_64(compute_part_b(a), compute_part_b(b)) == 0
+
+
+def test_hamming_distance_64_basics():
+    from peeklet.core.fingerprint import hamming_distance_64
+
+    assert hamming_distance_64(0, 0) == 0
+    assert hamming_distance_64(0, 1) == 1
+    assert hamming_distance_64(0xFFFFFFFFFFFFFFFF, 0) == 64

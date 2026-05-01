@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from typing import Protocol
 
+import numpy as np
+
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -79,6 +81,7 @@ _SIDEBAR_LEFT_FRACTION = 0.15
 # any box within 25% of the tallest box's height is "in the cluster".
 # Adjustable without touching extraction logic.
 _HEADING_FONT_CLUSTER_TOLERANCE = 0.75
+_HEADER_STRIP_Y_RANGE = (0.08, 0.22)
 _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 
 
@@ -135,3 +138,62 @@ def extract_sidebar_text(
     sidebar.sort(key=lambda b: (b.y, b.x))
     joined = " ".join(b.text for b in sidebar)
     return _normalize_text(joined)
+
+
+def hamming_distance_64(a: int, b: int) -> int:
+    """Number of differing bits between two non-negative 64-bit ints."""
+    return (a ^ b).bit_count()
+
+
+def _crop_header_strip(frame: np.ndarray) -> np.ndarray:
+    """Crop the [8% .. 22%] vertical band, full width."""
+    h = frame.shape[0]
+    y0 = int(round(h * _HEADER_STRIP_Y_RANGE[0]))
+    y1 = max(y0 + 1, int(round(h * _HEADER_STRIP_Y_RANGE[1])))
+    return frame[y0:y1, :]
+
+
+def _to_grayscale(frame: np.ndarray) -> np.ndarray:
+    if frame.ndim == 2:
+        return frame.astype(np.float32)
+    return (0.2989 * frame[:, :, 0] + 0.5870 * frame[:, :, 1] + 0.1140 * frame[:, :, 2]).astype(
+        np.float32
+    )
+
+
+def compute_part_b(frame: np.ndarray) -> int:
+    """Compute a 64-bit DCT pHash of the header strip.
+
+    Pipeline:
+      1. Crop y∈[8%..22%] full width.
+      2. Convert to grayscale.
+      3. Resize to 32×32 via PIL (BILINEAR).
+      4. Type-II DCT along both axes (scipy.fft).
+      5. Take the top-left 8×8 low-frequency block.
+      6. Use the median of the 63 non-DC coefficients as the threshold;
+         bits above the median are 1, below are 0. The DC coefficient
+         is excluded from the median (it dominates and would skew the
+         threshold).
+
+    The DC drop + median follows the standard pHash recipe and makes the
+    hash invariant to overall brightness shifts.
+    """
+    from PIL import Image
+    from scipy.fft import dct
+
+    strip = _crop_header_strip(frame)
+    if strip.size == 0:
+        return 0
+    gray = _to_grayscale(strip)
+    img = Image.fromarray(gray.astype(np.uint8)).resize((32, 32), Image.Resampling.BILINEAR)
+    arr = np.asarray(img, dtype=np.float32)
+    coeffs = dct(dct(arr, axis=0, norm="ortho"), axis=1, norm="ortho")
+    block = coeffs[:8, :8].copy()
+    flat = block.flatten()
+    non_dc = flat[1:]  # 63 elements, drops DC at [0,0]
+    threshold = float(np.median(non_dc))
+    bits = (flat > threshold).astype(np.uint8)
+    value = 0
+    for bit in bits:
+        value = (value << 1) | int(bit)
+    return value & ((1 << 64) - 1)
