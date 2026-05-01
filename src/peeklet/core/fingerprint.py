@@ -243,3 +243,42 @@ def part_a_is_empty(fp: Fingerprint, min_chars: int) -> bool:
     cluster under the same empty key and false-collapse.
     """
     return all(len(field) < min_chars for field in fp.part_a)
+
+
+class FingerprintIndex:
+    """Hash-map screen lookup keyed on normalized Part A.
+
+    Each bucket holds (header_phash, screen_id) tuples. Lookup scans the
+    bucket linearly; in practice a bucket holds 1–3 entries because Part
+    A pins identity tightly and Part B only resolves ambiguity within
+    the bucket.
+    """
+
+    def __init__(self, *, phash_threshold: int, ocr_field_min_chars: int) -> None:
+        self._buckets: dict[tuple[str, str, str], list[tuple[int, str]]] = {}
+        self._phash_threshold = phash_threshold
+        self._min_chars = ocr_field_min_chars
+
+    def lookup(self, fp: Fingerprint) -> str | None:
+        """Return the screen_id of an existing matching screen, or None.
+
+        Always misses when Part A is empty — see ``part_a_is_empty``.
+        """
+        if part_a_is_empty(fp, self._min_chars):
+            return None
+        bucket = self._buckets.get(fp.part_a)
+        if not bucket:
+            return None
+        for phash, screen_id in bucket:
+            if hamming_distance_64(phash, fp.header_phash) <= self._phash_threshold:
+                return screen_id
+        return None
+
+    def register(self, fp: Fingerprint, *, screen_id: str) -> None:
+        """Append ``(phash, screen_id)`` under the Part A key.
+
+        Empty-Part-A entries are still registered so that callers using
+        ``register`` directly observe a coherent state — the safety
+        bypass lives in ``lookup``, not here.
+        """
+        self._buckets.setdefault(fp.part_a, []).append((fp.header_phash, screen_id))

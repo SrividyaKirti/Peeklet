@@ -262,3 +262,50 @@ def test_part_a_is_empty_returns_false_when_one_field_meets_min_chars():
 
     fp = Fingerprint(url="", heading="dashboard", sidebar_text="", header_phash=0)
     assert part_a_is_empty(fp, min_chars=2) is False
+
+
+def test_index_first_lookup_returns_none():
+    from peeklet.core.fingerprint import Fingerprint, FingerprintIndex
+
+    idx = FingerprintIndex(phash_threshold=6, ocr_field_min_chars=2)
+    fp = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0)
+    assert idx.lookup(fp) is None
+
+
+def test_index_second_lookup_after_register_returns_screen_id():
+    from peeklet.core.fingerprint import Fingerprint, FingerprintIndex
+
+    idx = FingerprintIndex(phash_threshold=6, ocr_field_min_chars=2)
+    fp = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0)
+    idx.register(fp, screen_id="screen_001")
+    assert idx.lookup(fp) == "screen_001"
+
+
+def test_index_close_phash_in_same_bucket_returns_existing_id():
+    from peeklet.core.fingerprint import Fingerprint, FingerprintIndex
+
+    idx = FingerprintIndex(phash_threshold=6, ocr_field_min_chars=2)
+    base = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0)
+    near = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0b111)
+    idx.register(base, screen_id="screen_001")
+    assert idx.lookup(near) == "screen_001"
+
+
+def test_index_distant_phash_in_same_bucket_returns_none():
+    from peeklet.core.fingerprint import Fingerprint, FingerprintIndex
+
+    idx = FingerprintIndex(phash_threshold=6, ocr_field_min_chars=2)
+    base = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0)
+    far = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0xFFFF)
+    idx.register(base, screen_id="screen_001")
+    assert idx.lookup(far) is None
+
+
+def test_index_lookup_is_none_when_part_a_is_empty_under_safety_fallback():
+    from peeklet.core.fingerprint import Fingerprint, FingerprintIndex
+
+    idx = FingerprintIndex(phash_threshold=6, ocr_field_min_chars=2)
+    empty = Fingerprint(url="", heading="", sidebar_text="", header_phash=0)
+    idx.register(empty, screen_id="screen_001")
+    # safety: empty Part A should always miss
+    assert idx.lookup(empty) is None
