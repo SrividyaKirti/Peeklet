@@ -17,6 +17,7 @@ See ``docs/superpowers/specs/2026-04-30-content-addressable-screen-dedup-design.
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]+")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -54,3 +55,79 @@ def _normalize_url(text: str) -> str:
     kept = _URL_KEEP_RE.sub(" ", cut)
     collapsed = _WHITESPACE_RE.sub(" ", kept).strip()
     return collapsed.replace(" ", "")
+
+
+class _BoxLike(Protocol):
+    """Minimal protocol for an OCR word-box used by Part-A extraction.
+
+    Matches ``demo_filter.WordBox`` and any namedtuple with the same five
+    attributes. Defining it here keeps fingerprint independent of the
+    demo_filter module.
+    """
+
+    text: str
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+_TOP_BAND_FRACTION = 0.05
+_HEADING_TOP_FRACTION = 0.5
+_SIDEBAR_LEFT_FRACTION = 0.15
+_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+
+
+def extract_url(
+    boxes: list[_BoxLike],
+    frame_h: int,
+    frame_w: int,
+) -> str:
+    """Return the first URL-pattern token whose box falls in the top 5% of the frame."""
+    band = int(frame_h * _TOP_BAND_FRACTION)
+    for b in boxes:
+        if b.y + b.h > band:
+            continue
+        if _URL_RE.search(b.text):
+            match = _URL_RE.search(b.text)
+            return _normalize_url(match.group(0)) if match else ""
+    return ""
+
+
+def extract_heading(
+    boxes: list[_BoxLike],
+    frame_h: int,
+    frame_w: int,
+) -> str:
+    """Pick the longest text token at the largest font size in the top half.
+
+    "Largest font size" is approximated by box height. The largest
+    height value found above the midline defines the cluster; among
+    boxes within 25% of that max height, the one with the longest
+    ``text`` wins.
+    """
+    midline = frame_h * _HEADING_TOP_FRACTION
+    candidates = [b for b in boxes if b.y + b.h <= midline]
+    if not candidates:
+        return ""
+    max_h = max(b.h for b in candidates)
+    if max_h <= 0:
+        return ""
+    cluster = [b for b in candidates if b.h >= max_h * 0.75]
+    cluster.sort(key=lambda b: (-len(b.text), b.x))
+    return _normalize_text(cluster[0].text)
+
+
+def extract_sidebar_text(
+    boxes: list[_BoxLike],
+    frame_h: int,
+    frame_w: int,
+) -> str:
+    """Concatenate OCR text whose box is fully inside the left 15% of the frame."""
+    cutoff = frame_w * _SIDEBAR_LEFT_FRACTION
+    sidebar = [b for b in boxes if b.x + b.w <= cutoff]
+    if not sidebar:
+        return ""
+    sidebar.sort(key=lambda b: (b.y, b.x))
+    joined = " ".join(b.text for b in sidebar)
+    return _normalize_text(joined)
