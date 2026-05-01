@@ -254,17 +254,6 @@ def _quality_capture(
     return None
 
 
-def _save_screen_image(frame: np.ndarray, output_dir: Path, screen_index: int, ts_ms: int) -> Path:
-    """Save a screen image with the demo_NNNN_<ms>ms.jpg naming rule."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    name = f"demo_{screen_index:04d}_{ts_ms:08d}ms.jpg"
-    path = output_dir / name
-    from PIL import Image
-
-    Image.fromarray(frame).save(path)
-    return path
-
-
 def _ocr_joined_text(boxes: list[WordBox]) -> str:
     """Plain-joined OCR text for the screens[].ocr_text sidecar field."""
     return " ".join(b.text for b in boxes)
@@ -292,6 +281,7 @@ def apply_demo_filter(
     ``image_unavailable=True`` with ``screen_id=None``.
     """
     from peeklet.core.audio import parse_fathom_anchors
+    from peeklet.core.exporter import save_keyframe
     from peeklet.core.fingerprint import (
         FingerprintIndex,
         compute_fingerprint,
@@ -342,7 +332,6 @@ def apply_demo_filter(
     screens: list[Screen] = []
     moments: list[MomentEntry] = []
     next_screen_index = 1
-    screen_id_to_path: dict[str, Path] = {}
 
     for moment, mtype in annotated:
         captured = _quality_capture(decoder, t=moment.timestamp, config=config)
@@ -376,7 +365,8 @@ def apply_demo_filter(
 
         screen_id = f"screen_{next_screen_index:03d}"
         ts_ms = int(round(ts * 1000))
-        path = _save_screen_image(frame, output_dir, next_screen_index, ts_ms)
+        frame_id = f"demo_{next_screen_index:04d}_{ts_ms:08d}ms"
+        path = save_keyframe(frame, output_dir, frame_id, fmt="jpg")
         index.register(fp, screen_id=screen_id)
         screens.append(
             Screen(
@@ -387,7 +377,6 @@ def apply_demo_filter(
                 ocr_text=_ocr_joined_text(boxes),
             )
         )
-        screen_id_to_path[screen_id] = path
         moments.append(
             MomentEntry(
                 timestamp_ms=int(round(moment.timestamp * 1000)),

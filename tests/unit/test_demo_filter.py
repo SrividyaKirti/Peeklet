@@ -10,15 +10,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _pass_layout_rejector_by_default(request, monkeypatch):
-    """Default: let the layout rejector pass every frame in this module.
+    """Default: stub the layout rejector to always pass.
 
-    Tests that specifically exercise the rejector live in
-    ``TestIsLowInfoFrame`` (patches the signals directly) — those are
-    skipped here.
+    Tests that need to exercise the REAL rejector mark themselves
+    with ``@pytest.mark.rejector_live`` to skip this stub.
     """
-    if "TestIsLowInfoFrame" in request.node.nodeid:
-        return
-    if "test_low_info_rejector_accepts_real_text_frame" in request.node.nodeid:
+    if request.node.get_closest_marker("rejector_live"):
         return
     monkeypatch.setattr(
         "peeklet.core.demo_filter._is_low_info_frame",
@@ -157,6 +154,7 @@ def test_demo_filter_config_has_gallery_ocr_min_dim_default_at_least_1280():
     assert cfg.gallery_ocr_min_dim >= 1280
 
 
+@pytest.mark.rejector_live
 @pytest.mark.skipif(not _tesseract_available(), reason="tesseract binary not installed")
 def test_low_info_rejector_accepts_real_text_frame_at_720p():
     """Regression: a 720p frame with dashboard-density text must NOT be
@@ -393,6 +391,7 @@ class TestEdgePixelRatio:
         assert _edge_pixel_ratio(frame) == 0.0
 
 
+@pytest.mark.rejector_live
 class TestIsLowInfoFrame:
     def _cfg(self, **overrides):
         from peeklet.config import DemoFilterConfig
