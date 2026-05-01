@@ -206,3 +206,59 @@ def test_compute_part_b_structured_frame_golden():
     rng = np.random.default_rng(seed=_GOLDEN_RNG_SEED)
     frame = rng.integers(0, 256, (1000, 1600, 3), dtype=np.uint8)
     assert compute_part_b(frame) == _PINNED_GOLDEN_HASH
+
+
+def test_compute_fingerprint_combines_parts():
+    from peeklet.core.fingerprint import Fingerprint, compute_fingerprint
+
+    h, w = 1000, 1600
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    boxes = [
+        WB("https://app.fathom.video/calls/1", x=200, y=20, w=400, h=18),
+        WB("Dashboard", x=300, y=120, w=600, h=48),
+        WB("Home", x=20, y=200, w=80, h=20),
+    ]
+    fp = compute_fingerprint(frame, boxes)
+    assert isinstance(fp, Fingerprint)
+    assert fp.url == "https://app.fathom.video/calls/1"
+    assert fp.heading == "dashboard"
+    assert fp.sidebar_text == "home"
+    assert isinstance(fp.header_phash, int)
+
+
+def test_is_match_same_part_a_close_phash_returns_true():
+    from peeklet.core.fingerprint import Fingerprint, is_match
+
+    a = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0)
+    b = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0b111111)  # 6 bits
+    assert is_match(a, b, phash_threshold=6) is True
+
+
+def test_is_match_same_part_a_distant_phash_returns_false():
+    from peeklet.core.fingerprint import Fingerprint, is_match
+
+    a = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0)
+    b = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0xFF)  # 8 bits
+    assert is_match(a, b, phash_threshold=6) is False
+
+
+def test_is_match_different_part_a_close_phash_returns_false():
+    from peeklet.core.fingerprint import Fingerprint, is_match
+
+    a = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0)
+    b = Fingerprint(url="u2", heading="h", sidebar_text="s", header_phash=0)
+    assert is_match(a, b, phash_threshold=6) is False
+
+
+def test_part_a_is_empty_returns_true_when_all_three_below_min_chars():
+    from peeklet.core.fingerprint import Fingerprint, part_a_is_empty
+
+    fp = Fingerprint(url="", heading="", sidebar_text="a", header_phash=0)
+    assert part_a_is_empty(fp, min_chars=2) is True
+
+
+def test_part_a_is_empty_returns_false_when_one_field_meets_min_chars():
+    from peeklet.core.fingerprint import Fingerprint, part_a_is_empty
+
+    fp = Fingerprint(url="", heading="dashboard", sidebar_text="", header_phash=0)
+    assert part_a_is_empty(fp, min_chars=2) is False

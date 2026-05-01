@@ -17,6 +17,7 @@ See ``docs/superpowers/specs/2026-04-30-content-addressable-screen-dedup-design.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
@@ -195,3 +196,50 @@ def compute_part_b(frame: np.ndarray) -> int:
     bits = (flat > threshold).astype(np.uint8)
     packed = np.packbits(bits, bitorder="big")
     return int.from_bytes(packed.tobytes(), "big")
+
+
+@dataclass(frozen=True, slots=True)
+class Fingerprint:
+    """A screen's content-addressable identity.
+
+    Part A = (url, heading, sidebar_text), all normalized. Part B is the
+    header-strip 64-bit DCT pHash. Two fingerprints are the same screen
+    iff Part A is equal AND Hamming(Part B) ≤ threshold.
+    """
+
+    url: str
+    heading: str
+    sidebar_text: str
+    header_phash: int
+
+    @property
+    def part_a(self) -> tuple[str, str, str]:
+        return (self.url, self.heading, self.sidebar_text)
+
+
+def compute_fingerprint(frame: np.ndarray, boxes: list[_BoxLike]) -> Fingerprint:
+    """Compute Part A + Part B for ``frame`` given its OCR word boxes."""
+    h, w = frame.shape[:2]
+    return Fingerprint(
+        url=extract_url(boxes, frame_h=h, frame_w=w),
+        heading=extract_heading(boxes, frame_h=h, frame_w=w),
+        sidebar_text=extract_sidebar_text(boxes, frame_h=h, frame_w=w),
+        header_phash=compute_part_b(frame),
+    )
+
+
+def is_match(a: Fingerprint, b: Fingerprint, phash_threshold: int) -> bool:
+    """True iff Part A is equal and Part B is within ``phash_threshold`` bits."""
+    if a.part_a != b.part_a:
+        return False
+    return hamming_distance_64(a.header_phash, b.header_phash) <= phash_threshold
+
+
+def part_a_is_empty(fp: Fingerprint, min_chars: int) -> bool:
+    """True if every Part A field is shorter than ``min_chars``.
+
+    The dedup pipeline uses this to bypass collapse on frames where OCR
+    failed completely — otherwise unrelated unreadable frames would all
+    cluster under the same empty key and false-collapse.
+    """
+    return all(len(field) < min_chars for field in fp.part_a)
