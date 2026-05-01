@@ -301,6 +301,49 @@ def _is_low_info_frame(frame: np.ndarray, config: DemoFilterConfig) -> bool:
     return True
 
 
+def _quality_capture(
+    decoder: VideoDecoder,
+    t: float,
+    config: DemoFilterConfig,
+) -> tuple[np.ndarray, float, int] | None:
+    """Capture a frame at ``t`` that passes the quality gate.
+
+    Tries ``t``, then ``t±step``, ``t±2*step``, ... in alternating
+    ahead/behind order, up to ``quality_fallback_max_attempts`` attempts
+    within ``±quality_fallback_half_window_seconds``. Returns the first
+    frame that passes the layout/info-density gate, or ``None`` if every
+    attempt fails (caller emits ``image_unavailable``).
+
+    Negative timestamps are skipped silently so a moment near t=0 still
+    gets the chance to try later neighbors.
+    """
+    half = config.quality_fallback_half_window_seconds
+    step = config.quality_fallback_step_seconds
+    max_attempts = config.quality_fallback_max_attempts
+
+    deltas: list[float] = [0.0]
+    n = 1
+    while len(deltas) < max_attempts and n * step <= half + 1e-9:
+        deltas.append(+n * step)
+        if len(deltas) < max_attempts:
+            deltas.append(-n * step)
+        n += 1
+
+    for delta in deltas:
+        target = t + delta
+        if target < 0:
+            continue
+        try:
+            frame, ts, fnum = decoder.extract_frame_at(target)
+        except Exception as exc:  # pragma: no cover - decoder failures are rare
+            logger.warning("Quality-fallback decode failed at %.2fs: %s", target, exc)
+            continue
+        if not _is_low_info_frame(frame, config):
+            return frame, ts, fnum
+
+    return None
+
+
 def _build_search_window(
     moment_ts: float,
     segment: TranscriptSegment,
