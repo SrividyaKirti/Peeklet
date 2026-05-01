@@ -186,20 +186,23 @@ def test_hamming_distance_64_basics():
     assert hamming_distance_64(0xFFFFFFFFFFFFFFFF, 0) == 64
 
 
-def test_compute_part_b_zero_frame_golden():
+_GOLDEN_RNG_SEED = 1234
+_PINNED_GOLDEN_HASH = 0xD0093D73ADCBD603
+
+
+def test_compute_part_b_structured_frame_golden():
     """Pin resize filter, DCT norm, scan order, and bit-endianness.
 
-    The hash for a known-content frame must be stable across runs and
-    refactors. If this changes, persisted manifest hashes become
-    incompatible — bump a schema version when intentional.
+    A *structured* input is used so any change to the recipe (different
+    resize, different DCT norm, different median behavior, different bit
+    endianness) shifts the hash. An all-zero input would NOT catch
+    those changes — every pHash recipe produces 0 on uniform input.
+
+    If this hash changes, persisted manifest entries become incompatible
+    — bump a schema version when the change is intentional.
     """
     from peeklet.core.fingerprint import compute_part_b
 
-    frame = np.zeros((1000, 1600, 3), dtype=np.uint8)
-    h = compute_part_b(frame)
-    # Pinned the first time the test runs. If you intentionally change
-    # the pHash recipe, update this constant and any persisted manifests.
-    assert h == _PINNED_ZERO_FRAME_HASH
-
-
-_PINNED_ZERO_FRAME_HASH = 0x0
+    rng = np.random.default_rng(seed=_GOLDEN_RNG_SEED)
+    frame = rng.integers(0, 256, (1000, 1600, 3), dtype=np.uint8)
+    assert compute_part_b(frame) == _PINNED_GOLDEN_HASH
