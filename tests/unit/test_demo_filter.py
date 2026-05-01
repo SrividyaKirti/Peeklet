@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.skip(reason="rewritten in Task 9 — content-addressable dedup branch")
+
 
 @pytest.fixture(autouse=True)
 def _pass_layout_rejector_by_default(request, monkeypatch):

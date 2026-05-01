@@ -142,8 +142,7 @@ def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str])
     "--quality",
     type=click.Choice(["fast", "balanced", "precise"]),
     default=None,
-    help="Processing quality preset. Bundles processing_max_dim, "
-    "sample_fps, and frame_search_resolution.",
+    help="Processing quality preset. Bundles processing_max_dim and sample_fps.",
 )
 @click.option(
     "--sensitivity",

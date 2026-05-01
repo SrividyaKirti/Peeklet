@@ -555,7 +555,7 @@ def test_non_demo_transcript_is_silent_no_op(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
 def test_cli_quality_preset_fast_applies_values(tmp_path, monkeypatch):
-    """--quality fast sets processing_max_dim, sample_fps, frame_search_resolution."""
+    """--quality fast sets processing_max_dim and sample_fps."""
     from click.testing import CliRunner
 
     from peeklet.cli import main
@@ -571,7 +571,6 @@ def test_cli_quality_preset_fast_applies_values(tmp_path, monkeypatch):
     def spy_process_video(path, config, **kwargs):
         captured["max_dim"] = config.video.processing_max_dim
         captured["sample_fps"] = config.video.sample_fps
-        captured["search_res"] = config.demo_filter.frame_search_resolution
         return real_process_video(path, config, **kwargs)
 
     monkeypatch.setattr(video_module, "process_video", spy_process_video)
@@ -590,7 +589,7 @@ def test_cli_quality_preset_fast_applies_values(tmp_path, monkeypatch):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert captured == {"max_dim": 480, "sample_fps": 0.5, "search_res": 240}
+    assert captured == {"max_dim": 480, "sample_fps": 0.5}
 
 
 @pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
