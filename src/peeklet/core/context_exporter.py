@@ -227,3 +227,108 @@ def write_context_markdown(ctx: dict[str, Any], path: Path | str) -> None:
         lines.append("")
 
     path.write_text("\n".join(lines) + "\n")
+
+
+def _format_mm_ss(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def build_demo_context(
+    filename: str,
+    duration_s: float,
+    screens,  # list[Screen]
+    moments,  # list[MomentEntry]
+):
+    """Build the demo context.json structure (screens + moments)."""
+    return {
+        "video": {
+            "filename": filename,
+            "duration_s": duration_s,
+            "unique_screens": len(screens),
+            "total_moments": len(moments),
+        },
+        "screens": [
+            {
+                "id": s.screen_id,
+                "image_path": s.image_path,
+                "first_seen_ms": s.first_seen_ms,
+                "fingerprint": {
+                    "url": s.fingerprint.url,
+                    "heading": s.fingerprint.heading,
+                    "sidebar_text": s.fingerprint.sidebar_text,
+                    "header_phash": f"{s.fingerprint.header_phash:016x}",
+                },
+                "ocr_text": s.ocr_text,
+            }
+            for s in screens
+        ],
+        "moments": [
+            {
+                "timestamp_ms": m.timestamp_ms,
+                "caption": m.caption,
+                "type": m.type,
+                "screen_id": m.screen_id,
+                "image_unavailable": m.image_unavailable,
+            }
+            for m in moments
+        ],
+    }
+
+
+def write_demo_context_json(ctx, path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(ctx, indent=2, ensure_ascii=False) + "\n")
+
+
+def write_demo_context_markdown(
+    *,
+    path,
+    video_filename: str,
+    duration_s: float,
+    screens,  # list[Screen]
+    moments,  # list[MomentEntry]
+) -> None:
+    """Render the demo context.md format with shared image paths + backrefs."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    screen_index = {s.screen_id: s for s in screens}
+    first_seen_at_mmss: dict[str, str] = {}
+
+    lines: list[str] = [
+        f"# Demo Context: {video_filename}",
+        "",
+        f"Duration: {_format_duration(duration_s)} | Unique screens: "
+        f"{len(screens)} | Moments: {len(moments)}",
+        "",
+        "---",
+        "",
+    ]
+
+    for m in moments:
+        ts_s = m.timestamp_ms / 1000.0
+        mmss = _format_mm_ss(ts_s)
+        type_label = "ACTION ITEM" if m.type == "action_item" else "LLM"
+        lines.append(f"### {mmss} — {type_label}")
+        lines.append(f'> "{m.caption}"')
+        lines.append("")
+        if m.image_unavailable or m.screen_id is None:
+            lines.append("_(image unavailable)_")
+        else:
+            screen = screen_index[m.screen_id]
+            lines.append(f"![Screen]({screen.image_path})")
+            if m.screen_id in first_seen_at_mmss:
+                lines.append(f"↳ same screen as {first_seen_at_mmss[m.screen_id]}")
+            else:
+                first_seen_at_mmss[m.screen_id] = mmss
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    path.write_text("\n".join(lines))
