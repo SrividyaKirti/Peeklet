@@ -12,7 +12,7 @@ from PIL import Image
 if TYPE_CHECKING:
     import numpy as np
 
-    from peeklet.utils.types import FrameResult
+    from peeklet.utils.types import FrameResult, Screen
 
 MANIFEST_SCHEMA = pa.schema(
     [
@@ -143,3 +143,38 @@ class ManifestWriter:
         table = pa.Table.from_pylist(self._rows, schema=MANIFEST_SCHEMA)
         pq.write_table(table, self._path, compression=self._compression)
         self._rows.clear()
+
+
+DEMO_SCREEN_SCHEMA = pa.schema(
+    [
+        pa.field("screen_id", pa.string()),
+        pa.field("image_path", pa.string()),
+        pa.field("first_seen_ms", pa.int64()),
+        pa.field("url", pa.string()),
+        pa.field("heading", pa.string()),
+        pa.field("sidebar_text", pa.string()),
+        pa.field("header_phash", pa.string()),  # 16-char lowercase hex
+        pa.field("ocr_text", pa.string()),
+    ]
+)
+
+
+def write_demo_manifest(screens: list[Screen], path, compression: str = "snappy") -> None:
+    """Write one parquet row per unique demo screen."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "screen_id": s.screen_id,
+            "image_path": s.image_path,
+            "first_seen_ms": s.first_seen_ms,
+            "url": s.fingerprint.url,
+            "heading": s.fingerprint.heading,
+            "sidebar_text": s.fingerprint.sidebar_text,
+            "header_phash": f"{s.fingerprint.header_phash:016x}",
+            "ocr_text": s.ocr_text,
+        }
+        for s in screens
+    ]
+    table = pa.Table.from_pylist(rows, schema=DEMO_SCREEN_SCHEMA)
+    pq.write_table(table, path, compression=compression)
