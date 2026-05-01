@@ -188,12 +188,10 @@ def compute_part_b(frame: np.ndarray) -> int:
     img = Image.fromarray(gray.astype(np.uint8)).resize((32, 32), Image.Resampling.BILINEAR)
     arr = np.asarray(img, dtype=np.float32)
     coeffs = dct(dct(arr, axis=0, norm="ortho"), axis=1, norm="ortho")
-    block = coeffs[:8, :8].copy()
-    flat = block.flatten()
+    block = coeffs[:8, :8]
+    flat = block.ravel()
     non_dc = flat[1:]  # 63 elements, drops DC at [0,0]
     threshold = float(np.median(non_dc))
     bits = (flat > threshold).astype(np.uint8)
-    value = 0
-    for bit in bits:
-        value = (value << 1) | int(bit)
-    return value & ((1 << 64) - 1)
+    packed = np.packbits(bits, bitorder="big")
+    return int.from_bytes(packed.tobytes(), "big")

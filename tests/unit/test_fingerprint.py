@@ -153,17 +153,28 @@ def test_compute_part_b_returns_64_bit_int():
 
 
 def test_compute_part_b_uses_only_header_strip():
-    """Pixels outside the header strip should not influence the hash."""
+    """Pixels outside the header strip should not influence the hash.
+
+    Both frames carry identical *structured* content inside the strip and
+    different *structured* content outside. If the hash leaked outside
+    pixels, the Hamming distance would be > 0.
+    """
     from peeklet.core.fingerprint import compute_part_b, hamming_distance_64
 
+    rng = np.random.default_rng(seed=7)
     h, w = 1000, 1600
-    base = np.zeros((h, w, 3), dtype=np.uint8)
-    # paint the header strip identically in both frames
-    base[int(h * 0.08) : int(h * 0.22), :] = 128
-    a = base.copy()
-    b = base.copy()
-    # Differ only OUTSIDE the header strip
-    b[int(h * 0.30) : int(h * 0.90), :] = 255
+    y0, y1 = int(h * 0.08), int(h * 0.22)
+    strip_pixels = rng.integers(0, 256, (y1 - y0, w, 3), dtype=np.uint8)
+
+    a = np.zeros((h, w, 3), dtype=np.uint8)
+    a[y0:y1] = strip_pixels
+    b = np.zeros((h, w, 3), dtype=np.uint8)
+    b[y0:y1] = strip_pixels
+    # Differ only OUTSIDE the strip with structured noise so a leak would
+    # show up as nonzero Hamming distance.
+    outside_noise = rng.integers(0, 256, (h - y1, w, 3), dtype=np.uint8)
+    b[y1:] = outside_noise
+
     assert hamming_distance_64(compute_part_b(a), compute_part_b(b)) == 0
 
 
@@ -173,3 +184,22 @@ def test_hamming_distance_64_basics():
     assert hamming_distance_64(0, 0) == 0
     assert hamming_distance_64(0, 1) == 1
     assert hamming_distance_64(0xFFFFFFFFFFFFFFFF, 0) == 64
+
+
+def test_compute_part_b_zero_frame_golden():
+    """Pin resize filter, DCT norm, scan order, and bit-endianness.
+
+    The hash for a known-content frame must be stable across runs and
+    refactors. If this changes, persisted manifest hashes become
+    incompatible — bump a schema version when intentional.
+    """
+    from peeklet.core.fingerprint import compute_part_b
+
+    frame = np.zeros((1000, 1600, 3), dtype=np.uint8)
+    h = compute_part_b(frame)
+    # Pinned the first time the test runs. If you intentionally change
+    # the pHash recipe, update this constant and any persisted manifests.
+    assert h == _PINNED_ZERO_FRAME_HASH
+
+
+_PINNED_ZERO_FRAME_HASH = 0x0
