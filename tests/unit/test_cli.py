@@ -440,7 +440,8 @@ def test_cli_demo_mode_propagates_provider_and_model(tmp_path, monkeypatch):
     # Stub out the demo filter so the test doesn't need a real LLM call.
     # Patch on video_module — that's where process_video has imported the
     # symbol. Patching df_module would not affect the already-imported reference.
-    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
+    # Return (screens, moments) tuple matching the new apply_demo_filter signature.
+    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: ([], []))
 
     runner = CliRunner()
     result = runner.invoke(
@@ -492,7 +493,8 @@ def test_cli_demo_mode_accepts_openrouter_provider(tmp_path, monkeypatch):
         return real_process_video(path, config, **kwargs)
 
     monkeypatch.setattr(video_module, "process_video", spy_process_video)
-    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: [])
+    # Return (screens, moments) tuple matching the new apply_demo_filter signature.
+    monkeypatch.setattr(video_module, "apply_demo_filter", lambda **_kw: ([], []))
 
     runner = CliRunner()
     result = runner.invoke(
