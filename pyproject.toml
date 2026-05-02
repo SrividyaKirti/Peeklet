@@ -112,6 +112,7 @@ markers = [
     "webui: tests requiring WebUI dataset (deselect with '-m not webui')",
     "benchmark: performance benchmark tests",
     "rejector_live: this test exercises the real layout rejector (don't autouse-stub)",
+    "slow: long-running integration tests (use -m slow to run)",
 ]
 
 [dependency-groups]
