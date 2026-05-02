@@ -110,7 +110,7 @@ class DemoFilterConfig(BaseModel):
     # only if all three signals fall under their thresholds.
     min_text_lines: int = Field(default=10, ge=0)
     min_grid_cells: int = Field(default=12, ge=0)
-    min_edge_ratio: float = Field(default=0.015, ge=0.0, le=1.0)
+    min_edge_ratio: float = Field(default=0.020, ge=0.0, le=1.0)
 
     # Tail-skip: drop LLM picks whose timestamp lands in the final
     # fraction of the video. Anchors are guaranteed by Fathom and not

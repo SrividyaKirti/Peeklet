@@ -274,7 +274,7 @@ class TestDemoFilterLayoutConfig:
         cfg = DemoFilterConfig()
         assert cfg.min_text_lines == 10
         assert cfg.min_grid_cells == 12
-        assert cfg.min_edge_ratio == 0.015
+        assert cfg.min_edge_ratio == 0.020
 
     def test_thresholds_validated(self) -> None:
         from peeklet.config import DemoFilterConfig
