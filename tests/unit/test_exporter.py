@@ -188,3 +188,33 @@ class TestManifestVideoColumns:
             assert table.column(col)[0].as_py() is None, (
                 f"Column '{col}' should be null for image frames"
             )
+
+
+def test_write_demo_manifest_round_trips_screens(tmp_path):
+    import pyarrow.parquet as pq
+
+    from peeklet.core.exporter import write_demo_manifest
+    from peeklet.core.fingerprint import Fingerprint
+    from peeklet.utils.types import Screen
+
+    fp = Fingerprint(url="u", heading="dashboard", sidebar_text="s", header_phash=0xABCD)
+    screens = [
+        Screen(
+            screen_id="screen_001",
+            image_path="demo_0001_00057433ms.jpg",
+            first_seen_ms=57433,
+            fingerprint=fp,
+            ocr_text="dashboard home",
+        ),
+    ]
+    out = tmp_path / "manifest.parquet"
+    write_demo_manifest(screens, out, compression="snappy")
+    table = pq.read_table(out)
+    rows = table.to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["screen_id"] == "screen_001"
+    assert rows[0]["image_path"] == "demo_0001_00057433ms.jpg"
+    assert rows[0]["first_seen_ms"] == 57433
+    assert rows[0]["url"] == "u"
+    assert rows[0]["heading"] == "dashboard"
+    assert rows[0]["header_phash"] == "000000000000abcd"

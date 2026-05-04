@@ -243,14 +243,14 @@ def test_process_video_calls_demo_filter_when_enabled(tmp_path, monkeypatch):
     cfg.video.transcript_path = str(transcript_path)
     cfg.demo_filter.enabled = True
 
-    fake_filtered: list = []
-    mock_apply = MagicMock(return_value=fake_filtered)
+    mock_apply = MagicMock(return_value=([], []))
     monkeypatch.setattr(video_module, "apply_demo_filter", mock_apply)
 
     results = video_module.process_video(video_path, cfg)
 
     assert mock_apply.called, "apply_demo_filter should be invoked when demo_filter.enabled"
-    assert results == fake_filtered
+    # Demo path writes outputs and returns [] sentinel; FrameResult list is empty.
+    assert results == []
 
 
 def test_process_video_skips_demo_filter_when_disabled(tmp_path, monkeypatch):

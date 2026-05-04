@@ -2,11 +2,13 @@
 
 Uses a tiny synthetic video and a fake LLM client (no real API calls). The
 fake client returns a hardcoded list of moments, and the test verifies that
-Stage B picks frames, applies the gallery check, and writes the manifest.
+Stage B picks frames, applies content-addressable dedup, and writes the
+manifest + context files.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -46,7 +48,6 @@ def test_demo_mode_end_to_end_with_fake_llm(
     cfg.video.audio_detection = False
     cfg.video.transcript_path = str(transcript_path)
     cfg.demo_filter.enabled = True
-    cfg.demo_filter.gallery_min_words = 0  # disable gallery check for synthetic video
 
     fake_client = MagicMock()
     fake_client.pick_moments.return_value = [
@@ -73,34 +74,24 @@ def test_demo_mode_end_to_end_with_fake_llm(
     # Synthetic 64x64 frames would fail the layout rejector; bypass it for
     # the integration test so we're exercising the real pipeline wiring.
     monkeypatch.setattr(df_module, "_is_low_info_frame", lambda frame, config: False)
-    # Two synthetic frames produce the same dHash, which would trip pHash
-    # dedup. Hand out distinct hashes per call so both moments survive.
-    _counter = {"n": 0}
-
-    def _unique_hash(_frame):
-        _counter["n"] += 1
-        return _counter["n"] * 0x0123456789ABCDEF & 0xFFFFFFFFFFFFFFFF
-
-    monkeypatch.setattr(df_module, "dhash_64", _unique_hash)
 
     results = process_video(video_path, cfg)
 
-    assert len(results) == 2
-    assert all(r.is_keyframe for r in results)
-    goals = [r.visual_context_goal for r in results]
-    assert "first thing" in goals
-    assert "second thing" in goals
+    # Demo path returns empty sentinel list; outputs are in files.
+    assert results == []
 
-    # Outputs should be written
     out_dir = Path(cfg.exporter.output_dir)
     assert (out_dir / "manifest.parquet").exists()
     assert (out_dir / "context.json").exists()
     assert (out_dir / "context.md").exists()
 
-    # Verify new context.md format
+    ctx = json.loads((out_dir / "context.json").read_text())
+    assert "screens" in ctx
+    assert "moments" in ctx
+    assert len(ctx["moments"]) >= 1
+
     md = (out_dir / "context.md").read_text()
-    assert "Meeting Context:" in md
-    assert "Visual Table of Contents" in md
+    assert "# Demo Context:" in md
 
 
 def test_pipeline_no_gap_fill_in_output(
@@ -121,7 +112,6 @@ def test_pipeline_no_gap_fill_in_output(
     cfg.video.audio_detection = False
     cfg.video.transcript_path = str(transcript_path)
     cfg.demo_filter.enabled = True
-    cfg.demo_filter.gallery_min_words = 0
 
     fake_client = MagicMock()
     fake_client.pick_moments.return_value = [
@@ -142,17 +132,25 @@ def test_pipeline_no_gap_fill_in_output(
     monkeypatch.setattr(df_module, "pytesseract", MagicMock())
     monkeypatch.setattr(df_module, "_is_low_info_frame", lambda frame, config: False)
 
-    _counter = {"n": 0}
-
-    def _unique_hash(_frame):
-        _counter["n"] += 1
-        return _counter["n"] * 0x0123456789ABCDEF & 0xFFFFFFFFFFFFFFFF
-
-    monkeypatch.setattr(df_module, "dhash_64", _unique_hash)
-
     results = process_video(video_path, cfg)
 
-    assert len(results) >= 1
-    sources = {r.moment_source for r in results}
-    assert "gap_fill" not in sources
-    assert sources <= {"anchor", "llm"}
+    # Demo path returns empty sentinel list; outputs are in files.
+    assert results == []
+
+    out_dir = Path(cfg.exporter.output_dir)
+    assert (out_dir / "manifest.parquet").exists()
+    assert (out_dir / "context.json").exists()
+    assert (out_dir / "context.md").exists()
+
+    ctx = json.loads((out_dir / "context.json").read_text())
+    assert "screens" in ctx
+    assert "moments" in ctx
+    assert len(ctx["moments"]) >= 1
+
+    # No gap_fill sources — moments are anchor or llm
+    moment_sources = {m.get("moment_source") for m in ctx["moments"]}
+    assert "gap_fill" not in moment_sources
+    assert moment_sources <= {"anchor", "llm", None}
+
+    md = (out_dir / "context.md").read_text()
+    assert "# Demo Context:" in md

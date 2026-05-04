@@ -329,13 +329,20 @@ def process_video(
     # Demo mode: bypass the coarse pass entirely. The LLM picks moments,
     # Stage B picks frames, and we write outputs directly.
     if config.demo_filter.enabled:
+        from peeklet.core.context_exporter import (
+            build_demo_context,
+            write_demo_context_json,
+            write_demo_context_markdown,
+        )
+        from peeklet.core.exporter import write_demo_manifest
+
         demo_transcript: list[TranscriptSegment] = []
         transcript_text = ""
         if config.video.transcript_path:
             transcript_text = Path(config.video.transcript_path).read_text(encoding="utf-8")
             demo_transcript = parse_transcript(Path(config.video.transcript_path))
 
-        demo_results = apply_demo_filter(
+        screens, moments = apply_demo_filter(
             decoder=decoder,
             transcript=demo_transcript,
             config=config.demo_filter,
@@ -343,16 +350,31 @@ def process_video(
             transcript_text=transcript_text,
         )
 
-        ctx = build_context(meta.filename, meta.duration, demo_results, demo_transcript)
-        write_context_json(ctx, output_dir / "context.json")
-        write_context_markdown(ctx, output_dir / "context.md")
+        ctx = build_demo_context(
+            meta.filename,
+            meta.duration,
+            screens=screens,
+            moments=moments,
+        )
+        write_demo_context_json(ctx, output_dir / "context.json")
+        write_demo_context_markdown(
+            path=output_dir / "context.md",
+            video_filename=meta.filename,
+            duration_s=meta.duration,
+            screens=screens,
+            moments=moments,
+        )
+        write_demo_manifest(
+            screens,
+            output_dir / "manifest.parquet",
+            compression=config.exporter.parquet_compression,
+        )
 
-        for r in demo_results:
-            writer.append(r)
-        if owns_writer:
-            writer.flush()
-
-        return demo_results
+        # process_video returns FrameResult lists for the non-demo path;
+        # the demo path now writes its own outputs and returns an empty
+        # list as a sentinel — callers should consume context.json /
+        # manifest.parquet instead.
+        return []
 
     # Adaptive masking is designed for screencasts (cursor/clock noise).
     # In video mode it both adds significant overhead and tends to mask out

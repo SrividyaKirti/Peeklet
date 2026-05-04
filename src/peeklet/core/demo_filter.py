@@ -1,25 +1,24 @@
-"""Demo-mode frame filtering: transcript-driven LLM moment picking + frame selection.
+"""Demo-mode frame filtering: transcript-driven LLM moment picking + linear-pass dedup.
 
-The LLM picks the moments from the transcript, Peeklet picks the exact frame
-at each moment using forward-search bidirectional SSIM stability and an OCR
-gallery check. See the design spec at
-``docs/superpowers/specs/2026-04-09-transcript-driven-demo-mode-design.md``.
+The LLM picks the moments from the transcript; Peeklet captures a frame at
+each moment timestamp, runs the universal layout/info-density quality gate
+(with bounded ±N-second fallback), computes a content-addressable fingerprint,
+and deduplicates against screens already seen this run.
+
+See the design spec at
+``docs/superpowers/specs/2026-04-30-content-addressable-screen-dedup-design.md``.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from collections import namedtuple
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
-from peeklet.core.exporter import save_keyframe
 from peeklet.core.llm import build_llm_client
-from peeklet.utils.image import dhash_64, hamming_distance
-from peeklet.utils.types import EventType, FrameResult, Moment
+from peeklet.utils.types import Moment, MomentEntry, Screen
 
 if TYPE_CHECKING:
     from peeklet.config import DemoFilterConfig
@@ -37,7 +36,14 @@ except ImportError:  # pragma: no cover - exercised in install-error path
 _MIN_WORD_LENGTH = 2
 _MIN_WORD_CONFIDENCE = 30
 
-WordBox = namedtuple("WordBox", ["text", "conf", "x", "y", "w", "h"])
+
+class WordBox(NamedTuple):
+    text: str
+    conf: float
+    x: int
+    y: int
+    w: int
+    h: int
 
 
 def _downscale_for_ocr(frame: np.ndarray, downscale_dim: int) -> np.ndarray:
@@ -116,96 +122,6 @@ def _count_words_in_frame(frame: np.ndarray, downscale_dim: int) -> int:
     name. All new code should consume :func:`_ocr_word_boxes` directly.
     """
     return len(_ocr_word_boxes(frame, downscale_dim))
-
-
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
-# English stopwords that would otherwise manufacture false-positive overlaps
-# between a generic caption ("the dashboard") and any frame with common chrome.
-_STOPWORDS: frozenset[str] = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "or",
-        "the",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "to",
-        "of",
-        "in",
-        "on",
-        "at",
-        "by",
-        "for",
-        "from",
-        "with",
-        "into",
-        "onto",
-        "as",
-        "it",
-        "its",
-        "this",
-        "that",
-        "these",
-        "those",
-        "we",
-        "they",
-        "he",
-        "she",
-        "i",
-        "you",
-        "our",
-        "your",
-        "their",
-        "my",
-        "show",
-        "shows",
-        "showing",
-        "view",
-        "viewing",
-        "see",
-        "click",
-        "page",
-        "screen",
-        "panel",
-        "section",
-        "tab",
-        "window",
-    }
-)
-
-
-def _normalize_tokens(text: str) -> set[str]:
-    """Return lowercase alphanumeric tokens from ``text`` with stopwords removed.
-
-    Used for caption/image alignment: both the picked frame's OCR and the
-    moment's caption go through this so overlap is computed on a stable
-    canonical form. Short tokens (<3 chars) are dropped — they're mostly
-    single letters that introduce noise.
-    """
-    tokens = {t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 3}
-    return tokens - _STOPWORDS
-
-
-def _ocr_text_and_tokens(frame: np.ndarray, downscale_dim: int) -> tuple[str, set[str]]:
-    """Joined OCR text and normalized token set from one OCR pass.
-
-    Runs :func:`_ocr_word_boxes` once and returns both the raw joined
-    word text (useful as a sidecar for downstream MLLM grounding) and
-    the normalized token set used for caption/image alignment. Sharing
-    one OCR call keeps the alignment validation path single-pass even
-    when callers need both representations.
-    """
-    boxes = _ocr_word_boxes(frame, downscale_dim)
-    if not boxes:
-        return "", set()
-    joined = " ".join(b.text for b in boxes)
-    return joined, _normalize_tokens(joined)
 
 
 def _count_text_lines(boxes: list[WordBox]) -> int:
@@ -301,385 +217,52 @@ def _is_low_info_frame(frame: np.ndarray, config: DemoFilterConfig) -> bool:
     return True
 
 
-def _build_search_window(
-    moment_ts: float,
-    segment: TranscriptSegment,
-    max_window_sec: float,
-    lookback_sec: float = 0.0,
-) -> tuple[float, float]:
-    """Compute the (start, end) timestamps for the forward-search window.
+def _quality_capture(
+    decoder: VideoDecoder,
+    t: float,
+    config: DemoFilterConfig,
+) -> tuple[np.ndarray, float, int] | None:
+    """Capture a frame at ``t`` that passes the quality gate.
 
-    The window is biased ``lookback_sec`` before ``moment_ts`` so frames
-    the speaker was referencing *before* naming an action are still in
-    range, and clamped to the containing transcript segment. Total
-    window width stays ``max_window_sec``.
+    Tries ``t``, then ``t±step``, ``t±2*step``, ... in alternating
+    ahead/behind order, up to ``quality_fallback_max_attempts`` attempts
+    within ``±quality_fallback_half_window_seconds``. Returns the first
+    frame that passes the layout/info-density gate, or ``None`` if every
+    attempt fails (caller emits ``image_unavailable``).
+
+    Negative timestamps are skipped silently so a moment near t=0 still
+    gets the chance to try later neighbors.
     """
-    start = max(segment.start, moment_ts - lookback_sec)
-    end = min(segment.end, moment_ts + max_window_sec - lookback_sec)
-    if end < start:
-        end = start
-    return start, end
+    half = config.quality_fallback_half_window_seconds
+    step = config.quality_fallback_step_seconds
+    max_attempts = config.quality_fallback_max_attempts
 
+    deltas: list[float] = [0.0]
+    n = 1
+    while len(deltas) < max_attempts and n * step <= half + 1e-9:
+        deltas.append(+n * step)
+        if len(deltas) < max_attempts:
+            deltas.append(-n * step)
+        n += 1
 
-def _is_stable(
-    frame: np.ndarray,
-    prev: np.ndarray,
-    nxt: np.ndarray,
-    threshold: float,
-) -> bool:
-    """Bidirectional SSIM check: a frame is stable if both neighbors are similar.
+    for delta in deltas:
+        target = t + delta
+        if target < 0:
+            continue
+        try:
+            frame, ts, fnum = decoder.extract_frame_at(target)
+        except Exception as exc:  # pragma: no cover - decoder failures are rare
+            logger.warning("Quality-fallback decode failed at %.2fs: %s", target, exc)
+            continue
+        if not _is_low_info_frame(frame, config):
+            return frame, ts, fnum
 
-    Short-circuits the second SSIM call when the first one already disqualifies
-    the frame, since SSIM is in the Stage B hot path.
-    """
-    from peeklet.core.comparator import compare_frames
-
-    if compare_frames(frame, prev).ssim_score <= threshold:
-        return False
-    return compare_frames(frame, nxt).ssim_score > threshold
-
-
-def _find_segment_for_timestamp(
-    ts: float, transcript: list[TranscriptSegment]
-) -> TranscriptSegment | None:
-    """Return the transcript segment containing ``ts``, or None."""
-    for seg in transcript:
-        if seg.start <= ts <= seg.end:
-            return seg
     return None
 
 
-def _sample_window_frames(
-    decoder: VideoDecoder,
-    start: float,
-    end: float,
-    step: float,
-) -> list[tuple[np.ndarray, float, int]]:
-    """Decode a small set of frames from the search window."""
-    if end <= start:
-        try:
-            return [decoder.extract_frame_at(start)]
-        except Exception as exc:
-            logger.warning("Failed to extract frame at %.2fs: %s", start, exc)
-            return []
-    timestamps: list[float] = []
-    t = start
-    while t <= end + 1e-6:
-        timestamps.append(round(t, 6))
-        t += step
-    samples: list[tuple[np.ndarray, float, int]] = []
-    for ts in timestamps:
-        try:
-            samples.append(decoder.extract_frame_at(ts))
-        except Exception as exc:
-            logger.warning("Failed to extract frame at %.2fs: %s", ts, exc)
-    return samples
-
-
-def _pick_stable_index(
-    samples: list[tuple[np.ndarray, float, int]],
-    threshold: float,
-) -> int:
-    """Return the index of the first sample whose two neighbors are SSIM-similar.
-
-    Falls back to index 0 if no sample passes the bidirectional check (or if
-    the window has fewer than 3 samples to compare).
-    """
-    if len(samples) < 3:
-        return 0
-    for i in range(1, len(samples) - 1):
-        frame, _, _ = samples[i]
-        prev_frame, _, _ = samples[i - 1]
-        next_frame, _, _ = samples[i + 1]
-        if _is_stable(frame, prev_frame, next_frame, threshold):
-            return i
-    return 0
-
-
-def _pick_best_content_index(
-    samples: list[tuple[np.ndarray, float, int]],
-    downscale_dim: int,
-) -> int:
-    """Return the index of the frame with the most OCR-readable text.
-
-    Scores each sampled frame by OCR word count and returns the index
-    with the highest count. Ties are broken by picking the latest frame
-    (higher index — more likely to be fully loaded). Returns 0 when all
-    frames score zero or the sample list has a single entry.
-    """
-    if len(samples) <= 1:
-        return 0
-
-    best_idx = 0
-    best_count = -1
-    for i, (frame, _ts, _fnum) in enumerate(samples):
-        count = _count_words_in_frame(frame, downscale_dim)
-        if count > best_count or (count == best_count and count > 0):
-            best_count = count
-            best_idx = i
-
-    return best_idx
-
-
-def _pick_frame_for_moment(
-    decoder: VideoDecoder,
-    moment: Moment,
-    transcript: list[TranscriptSegment],
-    config: DemoFilterConfig,
-    extra_window_sec: float = 0.0,
-) -> tuple[np.ndarray, float, int, tuple[float, float]] | None:
-    """Run the search-window + scoring + low-info gates for one moment.
-
-    Returns ``(frame, timestamp, frame_number, (win_start, win_end))`` for
-    the picked frame, or ``None`` if no transcript segment matches, no
-    frames can be extracted, or the picked frame fails the low-info gate.
-    Dedup and tail-skip are the caller's responsibility. ``extra_window_sec``
-    widens the search window symmetrically (still clamped to segment
-    bounds) — used by the caption/image alignment retry path.
-    """
-    seg = _find_segment_for_timestamp(moment.timestamp, transcript)
-    if seg is None:
-        logger.warning(
-            "Moment at %.2fs ('%s') has no matching transcript segment, skipping",
-            moment.timestamp,
-            moment.visual_context_goal,
-        )
-        return None
-
-    win_start, win_end = _build_search_window(
-        moment_ts=moment.timestamp,
-        segment=seg,
-        max_window_sec=config.forward_search_window_max_sec + extra_window_sec,
-        lookback_sec=config.search_window_lookback_sec + extra_window_sec,
-    )
-    samples = _sample_window_frames(
-        decoder=decoder,
-        start=win_start,
-        end=win_end,
-        step=config.forward_search_step_sec,
-    )
-    if not samples:
-        logger.warning(
-            "No frames could be extracted for moment at %.2fs, skipping",
-            moment.timestamp,
-        )
-        return None
-
-    picked_idx = _pick_best_content_index(samples, config.gallery_ocr_min_dim)
-    picked_frame, picked_ts, picked_frame_num = samples[picked_idx]
-
-    if _is_low_info_frame(picked_frame, config):
-        logger.warning(
-            "Moment at %.2fs ('%s') picked a low-information frame "
-            "(gallery view or blank) — skipping.",
-            moment.timestamp,
-            moment.visual_context_goal,
-        )
-        return None
-
-    return picked_frame, picked_ts, picked_frame_num, (win_start, win_end)
-
-
-def merge_moments(
-    anchors: list[Moment],
-    llm_picks: list[Moment],
-    warn_proximity_sec: float = 10.0,
-) -> list[Moment]:
-    """Merge anchor and LLM-picked moments without dropping anything.
-
-    Stage B's SSIM + pHash + low-info gates are the sole dedup mechanism;
-    time-proximity is a poor proxy for content similarity, so we surface
-    near-anchor picks as warnings instead of silently dropping them.
-    """
-    anchor_timestamps = [a.timestamp for a in anchors]
-    near_anchor = 0
-    for pick in llm_picks:
-        nearest = min(
-            ((abs(pick.timestamp - at), at) for at in anchor_timestamps),
-            default=None,
-        )
-        if nearest is not None and nearest[0] <= warn_proximity_sec:
-            near_anchor += 1
-            logger.warning(
-                "LLM pick at %.2fs within %.1fs of anchor at %.2fs — kept, "
-                "but anchor proximity may produce a near-duplicate",
-                pick.timestamp,
-                nearest[0],
-                nearest[1],
-            )
-
-    combined = list(anchors) + list(llm_picks)
-    combined.sort(key=lambda m: m.timestamp)
-    logger.info(
-        "merged %d moments: %d anchor, %d llm (%d of %d near-anchor)",
-        len(combined),
-        len(anchors),
-        len(llm_picks),
-        near_anchor,
-        len(llm_picks),
-    )
-    return combined
-
-
-def select_frames_for_moments(
-    decoder: VideoDecoder,
-    moments: list[Moment],
-    transcript: list[TranscriptSegment],
-    config: DemoFilterConfig,
-    output_dir: Path,
-) -> list[FrameResult]:
-    """Stage B: for each LLM-picked moment, find the best actual frame.
-
-    Walks each moment, builds a forward search window inside the current
-    transcript segment, samples frames at ``forward_search_step_sec`` intervals,
-    picks the first bidirectionally-stable frame, runs the gallery check, and
-    saves the surviving frame as a keyframe.
-    """
-    from peeklet.core.comparator import compare_frames
-
-    output_dir = Path(output_dir)
-    meta = decoder.get_metadata()
-    results: list[FrameResult] = []
-    last_saved_frame: np.ndarray | None = None
-    last_saved_phash: int | None = None
-
-    tail_cutoff: float | None = None
-    if config.tail_skip_ratio > 0.0 and meta.duration > 0.0:
-        tail_cutoff = meta.duration * (1.0 - config.tail_skip_ratio)
-
-    for idx, moment in enumerate(moments, start=1):
-        is_anchor = moment.source == "anchor"
-
-        if not is_anchor and tail_cutoff is not None and moment.timestamp >= tail_cutoff:
-            logger.info(
-                "Moment at %.2fs ('%s') falls in the final %.1f%% of the video "
-                "(cutoff %.2fs), skipping as meeting-end noise.",
-                moment.timestamp,
-                moment.visual_context_goal,
-                config.tail_skip_ratio * 100.0,
-                tail_cutoff,
-            )
-            continue
-
-        picked = _pick_frame_for_moment(decoder, moment, transcript, config)
-        if picked is None:
-            continue
-        picked_frame, picked_ts, picked_frame_num, picked_window = picked
-
-        caption_tokens = _normalize_tokens(f"{moment.visual_context_goal} {moment.textual_anchor}")
-        alignment_confidence: str = "content"
-        frame_ocr_text, frame_ocr_tokens = _ocr_text_and_tokens(
-            picked_frame, config.gallery_ocr_min_dim
-        )
-        if caption_tokens:
-            frame_tokens = frame_ocr_tokens
-            if not (frame_tokens & caption_tokens):
-                # Try widening the search window once before falling back to
-                # temporal_only. Skip the retry if the initial window already
-                # spans the whole containing transcript segment (nothing to
-                # widen into).
-                seg = _find_segment_for_timestamp(moment.timestamp, transcript)
-                already_exhausted = seg is not None and (
-                    picked_window[0] <= seg.start and picked_window[1] >= seg.end
-                )
-                if not already_exhausted:
-                    retry = _pick_frame_for_moment(
-                        decoder, moment, transcript, config, extra_window_sec=5.0
-                    )
-                    if retry is not None:
-                        retry_frame, retry_ts, retry_fnum, _ = retry
-                        retry_text, retry_tokens = _ocr_text_and_tokens(
-                            retry_frame, config.gallery_ocr_min_dim
-                        )
-                        if retry_tokens & caption_tokens:
-                            picked_frame, picked_ts, picked_frame_num = (
-                                retry_frame,
-                                retry_ts,
-                                retry_fnum,
-                            )
-                            frame_ocr_text, frame_ocr_tokens = retry_text, retry_tokens
-                            logger.info(
-                                "Moment at %.2fs: widened window recovered a "
-                                "caption-aligned frame at %.2fs.",
-                                moment.timestamp,
-                                retry_ts,
-                            )
-                        else:
-                            alignment_confidence = "temporal_only"
-                    else:
-                        alignment_confidence = "temporal_only"
-                else:
-                    alignment_confidence = "temporal_only"
-                if alignment_confidence == "temporal_only":
-                    logger.info(
-                        "Moment at %.2fs ('%s'): kept temporal_only — no OCR "
-                        "token overlap with caption.",
-                        moment.timestamp,
-                        moment.visual_context_goal,
-                    )
-
-        if not is_anchor and last_saved_frame is not None and config.dedup_ssim_threshold < 1.0:
-            dedup_score = compare_frames(picked_frame, last_saved_frame).ssim_score
-            if dedup_score > config.dedup_ssim_threshold:
-                logger.info(
-                    "Moment at %.2fs ('%s') is a near-duplicate of the previous "
-                    "keyframe (ssim=%.3f > %.3f), skipping.",
-                    moment.timestamp,
-                    moment.visual_context_goal,
-                    dedup_score,
-                    config.dedup_ssim_threshold,
-                )
-                continue
-
-        if not is_anchor and last_saved_phash is not None:
-            current_phash = dhash_64(picked_frame)
-            dist = hamming_distance(current_phash, last_saved_phash)
-            if dist <= config.phash_hamming_threshold:
-                logger.info(
-                    "Moment at %.2fs ('%s') pHash duplicate of previous keyframe "
-                    "(hamming=%d <= %d), skipping.",
-                    moment.timestamp,
-                    moment.visual_context_goal,
-                    dist,
-                    config.phash_hamming_threshold,
-                )
-                continue
-
-        frame_id = f"demo_{idx:04d}_{int(picked_ts * 1000):08d}ms"
-        asset_path = save_keyframe(picked_frame, output_dir, frame_id, fmt="jpg")
-        last_saved_frame = picked_frame
-        last_saved_phash = dhash_64(picked_frame)
-
-        results.append(
-            FrameResult(
-                frame_id=frame_id,
-                event_type=EventType.KEYFRAME,
-                is_keyframe=True,
-                perceptual_hash="",  # not computed in demo mode
-                frame_width=picked_frame.shape[1],
-                frame_height=picked_frame.shape[0],
-                source_format="video",
-                asset_path=str(asset_path),
-                trigger_type="transcript_trigger",
-                source_video=meta.filename,
-                video_timestamp=picked_ts,
-                video_frame_number=picked_frame_num,
-                video_duration=meta.duration,
-                visual_context_goal=moment.visual_context_goal,
-                textual_anchor=moment.textual_anchor,
-                downstream_utility=moment.downstream_utility,
-                moment_source=moment.source,
-                keyframe_index=idx,
-                alignment_confidence=alignment_confidence,  # type: ignore[arg-type]
-                ocr_text=frame_ocr_text,
-                ocr_tokens=sorted(frame_ocr_tokens),
-            )
-        )
-
-    # Backfill total_keyframes
-    for r in results:
-        r.total_keyframes = len(results)
-    return results
+def _ocr_joined_text(boxes: list[WordBox]) -> str:
+    """Plain-joined OCR text for the screens[].ocr_text sidecar field."""
+    return " ".join(b.text for b in boxes)
 
 
 def apply_demo_filter(
@@ -688,43 +271,127 @@ def apply_demo_filter(
     config: DemoFilterConfig,
     output_dir: Path,
     transcript_text: str = "",
-) -> list[FrameResult]:
+) -> tuple[list[Screen], list[MomentEntry]]:
     """Top-level demo-mode entry point.
 
-    Parses Fathom anchors from ``transcript_text`` first, asks the LLM to
-    pick complementary moments aware of those anchors, merges anchor and
-    LLM picks (warn-only), then runs Stage B to pick the actual frames.
+    Parses Fathom anchors from ``transcript_text``, asks the LLM to
+    pick complementary moments, then runs a single linear pass:
+
+      1. Capture frame at moment timestamp.
+      2. Universal quality gate (with bounded ±N-second fallback).
+      3. Compute fingerprint.
+      4. Lookup; on hit reuse screen_id; on miss save image + register.
+
+    Returns ``(screens, moments)``. Anchor moments use ``type="action_item"``;
+    LLM picks use ``type="llm"``. Quality-gate failures emit
+    ``image_unavailable=True`` with ``screen_id=None``.
     """
     from peeklet.core.audio import parse_fathom_anchors
+    from peeklet.core.exporter import save_keyframe
+    from peeklet.core.fingerprint import (
+        FingerprintIndex,
+        compute_fingerprint,
+    )
 
     if pytesseract is None:
         raise RuntimeError(
-            "Demo mode requires pytesseract for OCR-based frame scoring and "
-            "gallery detection. Install with: pip install peeklet[demo]"
+            "Demo mode requires pytesseract for OCR-based frame scoring "
+            "and gallery detection. Install with: pip install peeklet[demo]"
         )
 
+    output_dir = Path(output_dir)
     meta = decoder.get_metadata()
     client = build_llm_client(provider=config.llm_provider, model=config.llm_model)
 
     anchors = parse_fathom_anchors(transcript_text) if transcript_text else []
-    if anchors:
-        logger.info("Parsed %d ACTION ITEM anchors from transcript", len(anchors))
-
     llm_picks = client.pick_moments(transcript, meta.duration, anchors=anchors)
-    logger.info("LLM picked %d complementary moments", len(llm_picks))
-    if not llm_picks:
-        logger.info("LLM returned 0 complementary picks — anchors-only output")
+    logger.info("Demo dedup: %d anchors + %d LLM picks", len(anchors), len(llm_picks))
 
-    moments = merge_moments(anchors, llm_picks)
+    # Tag moments with type and merge in time order. Tail-skip applies
+    # to LLM picks only (anchors are guaranteed by Fathom).
+    tail_cutoff: float | None = None
+    if config.tail_skip_ratio > 0.0 and meta.duration > 0.0:
+        tail_cutoff = meta.duration * (1.0 - config.tail_skip_ratio)
 
-    if not moments:
-        logger.warning("no anchors and no LLM picks — demo mode produced 0 keyframes")
-        return []
+    annotated: list[tuple[Moment, str]] = []
+    for a in anchors:
+        annotated.append((a, "action_item"))
+    for p in llm_picks:
+        if tail_cutoff is not None and p.timestamp >= tail_cutoff:
+            logger.info(
+                "LLM pick at %.2fs in tail (cutoff %.2fs) — skipping.",
+                p.timestamp,
+                tail_cutoff,
+            )
+            continue
+        annotated.append((p, "llm"))
+    annotated.sort(key=lambda pair: pair[0].timestamp)
 
-    return select_frames_for_moments(
-        decoder=decoder,
-        moments=moments,
-        transcript=transcript,
-        config=config,
-        output_dir=output_dir,
+    if not annotated:
+        logger.warning("no anchors and no LLM picks — demo mode produced 0 outputs")
+        return [], []
+
+    index = FingerprintIndex(
+        phash_threshold=config.phash_threshold,
+        ocr_field_min_chars=config.ocr_field_min_chars,
     )
+    screens: list[Screen] = []
+    moments: list[MomentEntry] = []
+    next_screen_index = 1
+
+    for moment, mtype in annotated:
+        captured = _quality_capture(decoder, t=moment.timestamp, config=config)
+        if captured is None:
+            moments.append(
+                MomentEntry(
+                    timestamp_ms=int(round(moment.timestamp * 1000)),
+                    caption=moment.visual_context_goal or moment.textual_anchor,
+                    type=mtype,
+                    screen_id=None,
+                    image_unavailable=True,
+                )
+            )
+            continue
+
+        frame, ts, _fnum = captured
+        boxes = _ocr_word_boxes(frame, config.gallery_ocr_min_dim)
+        fp = compute_fingerprint(frame, boxes)  # type: ignore[arg-type]
+        existing_id = index.lookup(fp)
+        if existing_id is not None:
+            moments.append(
+                MomentEntry(
+                    timestamp_ms=int(round(moment.timestamp * 1000)),
+                    caption=moment.visual_context_goal or moment.textual_anchor,
+                    type=mtype,
+                    screen_id=existing_id,
+                    image_unavailable=False,
+                )
+            )
+            continue
+
+        screen_id = f"screen_{next_screen_index:03d}"
+        ts_ms = int(round(ts * 1000))
+        frame_id = f"demo_{next_screen_index:04d}_{ts_ms:08d}ms"
+        path = save_keyframe(frame, output_dir, frame_id, fmt="jpg")
+        index.register(fp, screen_id=screen_id)
+        screens.append(
+            Screen(
+                screen_id=screen_id,
+                image_path=path.name,
+                first_seen_ms=ts_ms,
+                fingerprint=fp,
+                ocr_text=_ocr_joined_text(boxes),
+            )
+        )
+        moments.append(
+            MomentEntry(
+                timestamp_ms=int(round(moment.timestamp * 1000)),
+                caption=moment.visual_context_goal or moment.textual_anchor,
+                type=mtype,
+                screen_id=screen_id,
+                image_unavailable=False,
+            )
+        )
+        next_screen_index += 1
+
+    return screens, moments

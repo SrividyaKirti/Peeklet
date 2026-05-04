@@ -413,3 +413,124 @@ class TestWriteContextMarkdown:
 
         md = out_path.read_text()
         assert "Screenshot 1" in md
+
+
+def test_build_demo_context_emits_screens_and_moments():
+    from peeklet.core.context_exporter import build_demo_context
+    from peeklet.core.fingerprint import Fingerprint
+    from peeklet.utils.types import MomentEntry, Screen
+
+    fp = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0xABCD)
+    screens = [
+        Screen(
+            screen_id="screen_001",
+            image_path="demo_0001_00057433ms.jpg",
+            first_seen_ms=57433,
+            fingerprint=fp,
+            ocr_text="dashboard home",
+        ),
+    ]
+    moments = [
+        MomentEntry(
+            timestamp_ms=57433,
+            caption="dashboard",
+            type="action_item",
+            screen_id="screen_001",
+            image_unavailable=False,
+        ),
+        MomentEntry(
+            timestamp_ms=132033,
+            caption="follow-up",
+            type="llm",
+            screen_id="screen_001",
+            image_unavailable=False,
+        ),
+    ]
+    ctx = build_demo_context("test.mp4", duration_s=600.0, screens=screens, moments=moments)
+
+    assert ctx["video"]["filename"] == "test.mp4"
+    assert ctx["video"]["duration_s"] == 600.0
+    assert ctx["video"]["unique_screens"] == 1
+    assert ctx["video"]["total_moments"] == 2
+    assert len(ctx["screens"]) == 1
+    assert ctx["screens"][0]["fingerprint"]["header_phash"] == "000000000000abcd"
+    assert ctx["moments"][0]["screen_id"] == "screen_001"
+
+
+def test_write_demo_context_markdown_includes_backref_for_repeats(tmp_path):
+    from peeklet.core.context_exporter import write_demo_context_markdown
+    from peeklet.core.fingerprint import Fingerprint
+    from peeklet.utils.types import MomentEntry, Screen
+
+    fp = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0)
+    screens = [
+        Screen(
+            screen_id="screen_001",
+            image_path="demo_0001_00057433ms.jpg",
+            first_seen_ms=57433,
+            fingerprint=fp,
+            ocr_text="",
+        ),
+    ]
+    moments = [
+        MomentEntry(
+            timestamp_ms=132033,
+            caption="first",
+            type="action_item",
+            screen_id="screen_001",
+            image_unavailable=False,
+        ),
+        MomentEntry(
+            timestamp_ms=588033,
+            caption="second",
+            type="action_item",
+            screen_id="screen_001",
+            image_unavailable=False,
+        ),
+    ]
+    out = tmp_path / "context.md"
+    write_demo_context_markdown(
+        path=out,
+        video_filename="test.mp4",
+        duration_s=600.0,
+        screens=screens,
+        moments=moments,
+    )
+    text = out.read_text()
+    assert "02:12 — ACTION ITEM" in text
+    assert "demo_0001_00057433ms.jpg" in text
+    # The first occurrence should NOT have a backref
+    first_block = text.split("---")[0]
+    assert "same screen as" not in first_block
+    # Second moment (09:48) should reference back to 02:12
+    assert "↳ same screen as 02:12" in text
+
+
+def test_write_demo_context_markdown_image_unavailable():
+    import tempfile
+    from pathlib import Path
+
+    from peeklet.core.context_exporter import write_demo_context_markdown
+    from peeklet.utils.types import MomentEntry
+
+    moments = [
+        MomentEntry(
+            timestamp_ms=10000,
+            caption="failed gate",
+            type="action_item",
+            screen_id=None,
+            image_unavailable=True,
+        ),
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "context.md"
+        write_demo_context_markdown(
+            path=out,
+            video_filename="test.mp4",
+            duration_s=60.0,
+            screens=[],
+            moments=moments,
+        )
+        text = out.read_text()
+        assert "_(image unavailable)_" in text
+        assert "00:10 — ACTION ITEM" in text

@@ -85,59 +85,59 @@ class VideoConfig(BaseModel):
 class DemoFilterConfig(BaseModel):
     """Demo-mode frame filtering settings.
 
-    Activated via the CLI ``--demo-mode`` flag. The LLM picks screenshot-worthy
-    moments from the transcript and Peeklet picks the exact frame for each
-    moment using forward-search bidirectional SSIM stability plus an OCR
-    gallery check. See the design spec for full details.
+    Activated via the CLI ``--demo-mode`` flag. The LLM picks
+    screenshot-worthy moments from the transcript; for each moment
+    Peeklet captures a frame, runs the universal layout/info-density
+    quality gate (with bounded ±N-second fallback), then computes a
+    content-addressable fingerprint to deduplicate against screens
+    already saved this run.
+
+    See ``docs/superpowers/specs/2026-04-30-content-addressable-screen-dedup-design.md``.
     """
+
+    model_config = {"extra": "forbid"}
 
     enabled: bool = False
     llm_provider: Literal["anthropic", "openai", "openrouter"] = "anthropic"
     llm_model: str = "claude-haiku-4-5"
-    # Frame search and selection
-    frame_search_resolution: int = Field(default=360, gt=0)
-    ssim_stability_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
-    forward_search_step_sec: float = Field(default=0.5, gt=0.0)
-    forward_search_window_max_sec: float = Field(default=10.0, gt=0.0)
-    # Gallery detection (reuses _count_words_in_frame)
-    gallery_min_words: int = Field(default=5, ge=0)
-    # Minimum longest-edge resolution for OCR. Frames are downscaled only if
-    # they exceed this value, so OCR runs at near-source resolution. Reusing
-    # ``frame_search_resolution`` (which can be 240–540 under quality presets)
-    # destroys text before Tesseract sees it on 720p+ screen-share recordings,
-    # silently flagging every demo frame as gallery view. Default 1920 leaves
-    # 1080p and smaller frames untouched and downscales 4K to 1920 wide.
+
+    # Frame OCR resolution. Frames are downscaled only if they exceed
+    # this; OCR runs at near-source resolution. 1920 leaves 1080p
+    # untouched and downscales 4K to 1920 wide.
     gallery_ocr_min_dim: int = Field(default=1920, gt=0)
-    # Near-duplicate suppression: drop a moment whose candidate frame SSIMs
-    # above this threshold against the most recently saved keyframe. 1.0
-    # disables dedup; 0.0 drops every moment after the first. Only compared
-    # against the immediately previous keyframe, so a later moment that
-    # legitimately revisits an earlier page is still allowed through.
-    dedup_ssim_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
-    # Skip LLM moments whose timestamp falls in the final fraction of the
-    # video. Meeting recordings often continue past the end of the demo with
-    # social chatter, and the LLM sometimes grasps at those transcript
-    # tokens and picks a wrap-up frame with no meaningful content. 0.0
-    # disables the tail skip entirely.
-    tail_skip_ratio: float = Field(default=0.02, ge=0.0, le=0.5)
-    # --- Layout-based low-info rejector (PR A) ---
-    # Replaces the raw word-count gate. A frame is rejected only if ALL three
-    # signals below fall under their thresholds (triple-AND), so a legit
-    # minimalist-but-valid UI passes on at least one axis while gallery views
-    # and blank scratch pages get caught.
+
+    # Layout/info-density rejector — triple-AND. A frame is rejected
+    # only if all three signals fall under their thresholds.
     min_text_lines: int = Field(default=10, ge=0)
     min_grid_cells: int = Field(default=12, ge=0)
-    min_edge_ratio: float = Field(default=0.015, ge=0.0, le=1.0)
-    # Post-selection perceptual-hash dedup. A newly picked frame is dropped
-    # if its 64-bit dHash Hamming distance to the most recently saved keyframe
-    # is <= this value. 0 means exact-match only; 64 disables dedup. Runs
-    # after dedup_ssim_threshold as a backstop for near-duplicates SSIM missed.
-    phash_hamming_threshold: int = Field(default=5, ge=0, le=64)
-    # How far before each moment's timestamp the search window starts.
-    # Product-review speakers typically reference a UI element *before*
-    # naming the action, so biasing the window backward captures the
-    # frame the speaker was actually pointing at.
-    search_window_lookback_sec: float = Field(default=3.0, ge=0.0)
+    min_edge_ratio: float = Field(default=0.020, ge=0.0, le=1.0)
+
+    # Tail-skip: drop LLM picks whose timestamp lands in the final
+    # fraction of the video. Anchors are guaranteed by Fathom and not
+    # subject to tail-skip; only LLM picks (which sometimes grasp at
+    # meeting-end chatter) are filtered. 0.0 disables.
+    tail_skip_ratio: float = Field(default=0.02, ge=0.0, le=0.5)
+
+    # --- Bounded quality fallback ---
+    # When the layout rejector fails the frame at the moment's
+    # timestamp, try nearby frames at ±step, ±2*step, ... up to
+    # ±half_window seconds. First passing frame wins; original
+    # timestamp is preserved in the moment metadata. If all attempts
+    # fail, emit caption with image_unavailable=True.
+    quality_fallback_max_attempts: int = Field(default=8, ge=0)
+    quality_fallback_half_window_seconds: float = Field(default=4.0, gt=0.0)
+    quality_fallback_step_seconds: float = Field(default=1.0, gt=0.0)
+
+    # --- Fingerprint dedup ---
+    # Header-strip pHash Hamming threshold for "same screen" within a
+    # Part-A bucket. Lenient (high) → filter-chip splits collapse;
+    # strict (low) → scroll cases split.
+    phash_threshold: int = Field(default=6, ge=0, le=64)
+    # Minimum chars per Part-A field for the field to count as
+    # populated. If all three fields are below this, the dedup safety
+    # fallback bypasses collapse so unreadable frames don't all
+    # cluster under the same empty key.
+    ocr_field_min_chars: int = Field(default=2, ge=0)
 
 
 class PeekletConfig(BaseModel):
@@ -179,17 +179,14 @@ QUALITY_PRESETS: dict[str, dict[str, float | int]] = {
     "fast": {
         "processing_max_dim": 480,
         "sample_fps": 0.5,
-        "frame_search_resolution": 240,
     },
     "balanced": {
         "processing_max_dim": 720,
         "sample_fps": 1.0,
-        "frame_search_resolution": 360,
     },
     "precise": {
         "processing_max_dim": 1080,
         "sample_fps": 2.0,
-        "frame_search_resolution": 540,
     },
 }
 
@@ -203,7 +200,6 @@ def apply_quality_preset(config: PeekletConfig, preset: str) -> None:
     values = QUALITY_PRESETS[preset]
     config.video.processing_max_dim = int(values["processing_max_dim"])
     config.video.sample_fps = float(values["sample_fps"])
-    config.demo_filter.frame_search_resolution = int(values["frame_search_resolution"])
 
 
 SENSITIVITY_PRESETS: dict[str, dict[str, float | int]] = {

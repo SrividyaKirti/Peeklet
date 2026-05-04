@@ -176,11 +176,8 @@ def test_demo_filter_config_defaults():
     assert cfg.demo_filter.enabled is False
     assert cfg.demo_filter.llm_provider == "anthropic"
     assert cfg.demo_filter.llm_model == "claude-haiku-4-5"
-    assert cfg.demo_filter.frame_search_resolution == 360
-    assert cfg.demo_filter.ssim_stability_threshold == 0.92
-    assert cfg.demo_filter.forward_search_step_sec == 0.5
-    assert cfg.demo_filter.forward_search_window_max_sec == 10.0
-    assert cfg.demo_filter.gallery_min_words == 5
+    assert cfg.demo_filter.gallery_ocr_min_dim == 1920
+    assert cfg.demo_filter.tail_skip_ratio == 0.02
 
 
 def test_demo_filter_config_rejects_unknown_provider():
@@ -203,13 +200,11 @@ class TestQualityPresets:
         config = PeekletConfig()
         baseline_max_dim = config.video.processing_max_dim
         baseline_sample_fps = config.video.sample_fps
-        baseline_search_res = config.demo_filter.frame_search_resolution
 
         apply_quality_preset(config, "balanced")
 
         assert config.video.processing_max_dim == baseline_max_dim
         assert config.video.sample_fps == baseline_sample_fps
-        assert config.demo_filter.frame_search_resolution == baseline_search_res
 
     def test_apply_quality_preset_fast(self) -> None:
         config = PeekletConfig()
@@ -217,7 +212,6 @@ class TestQualityPresets:
 
         assert config.video.processing_max_dim == 480
         assert config.video.sample_fps == 0.5
-        assert config.demo_filter.frame_search_resolution == 240
 
     def test_apply_quality_preset_precise(self) -> None:
         config = PeekletConfig()
@@ -225,7 +219,6 @@ class TestQualityPresets:
 
         assert config.video.processing_max_dim == 1080
         assert config.video.sample_fps == 2.0
-        assert config.demo_filter.frame_search_resolution == 540
 
     def test_apply_quality_preset_invalid_raises(self) -> None:
         config = PeekletConfig()
@@ -281,8 +274,7 @@ class TestDemoFilterLayoutConfig:
         cfg = DemoFilterConfig()
         assert cfg.min_text_lines == 10
         assert cfg.min_grid_cells == 12
-        assert cfg.min_edge_ratio == 0.015
-        assert cfg.phash_hamming_threshold == 5
+        assert cfg.min_edge_ratio == 0.020
 
     def test_thresholds_validated(self) -> None:
         from peeklet.config import DemoFilterConfig
@@ -291,7 +283,50 @@ class TestDemoFilterLayoutConfig:
             DemoFilterConfig(min_text_lines=-1)
         with pytest.raises(ValidationError):
             DemoFilterConfig(min_edge_ratio=-0.1)
-        with pytest.raises(ValidationError):
-            DemoFilterConfig(phash_hamming_threshold=-1)
-        with pytest.raises(ValidationError):
-            DemoFilterConfig(phash_hamming_threshold=65)
+
+
+def test_demo_filter_config_has_phash_threshold_default_6():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.phash_threshold == 6
+
+
+def test_demo_filter_config_has_ocr_field_min_chars_default_2():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.ocr_field_min_chars == 2
+
+
+def test_demo_filter_config_has_quality_fallback_defaults():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.quality_fallback_max_attempts == 8
+    assert cfg.quality_fallback_half_window_seconds == 4.0
+    assert cfg.quality_fallback_step_seconds == 1.0
+
+
+def test_demo_filter_config_rejects_removed_fields():
+    """SSIM dedup, pHash dedup, and the per-moment search window are gone.
+
+    A config file that still supplies them must fail validation rather
+    than silently ignore — that gives users a clear signal to update.
+    """
+    import pydantic
+
+    from peeklet.config import DemoFilterConfig
+
+    for field in (
+        "dedup_ssim_threshold",
+        "phash_hamming_threshold",
+        "forward_search_window_max_sec",
+        "forward_search_step_sec",
+        "search_window_lookback_sec",
+        "ssim_stability_threshold",
+        "frame_search_resolution",
+        "gallery_min_words",
+    ):
+        with pytest.raises(pydantic.ValidationError):
+            DemoFilterConfig(**{field: 0.5})
