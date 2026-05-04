@@ -12,9 +12,8 @@ See the design spec at
 from __future__ import annotations
 
 import logging
-from collections import namedtuple
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
@@ -37,7 +36,14 @@ except ImportError:  # pragma: no cover - exercised in install-error path
 _MIN_WORD_LENGTH = 2
 _MIN_WORD_CONFIDENCE = 30
 
-WordBox = namedtuple("WordBox", ["text", "conf", "x", "y", "w", "h"])
+
+class WordBox(NamedTuple):
+    text: str
+    conf: float
+    x: int
+    y: int
+    w: int
+    h: int
 
 
 def _downscale_for_ocr(frame: np.ndarray, downscale_dim: int) -> np.ndarray:
@@ -349,7 +355,7 @@ def apply_demo_filter(
 
         frame, ts, _fnum = captured
         boxes = _ocr_word_boxes(frame, config.gallery_ocr_min_dim)
-        fp = compute_fingerprint(frame, boxes)
+        fp = compute_fingerprint(frame, boxes)  # type: ignore[arg-type]
         existing_id = index.lookup(fp)
         if existing_id is not None:
             moments.append(

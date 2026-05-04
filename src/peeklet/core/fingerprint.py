@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]+")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -87,7 +90,7 @@ _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 
 
 def extract_url(
-    boxes: list[_BoxLike],
+    boxes: Sequence[_BoxLike],
     frame_h: int,
     frame_w: int,
 ) -> str:
@@ -103,7 +106,7 @@ def extract_url(
 
 
 def extract_heading(
-    boxes: list[_BoxLike],
+    boxes: Sequence[_BoxLike],
     frame_h: int,
     frame_w: int,
 ) -> str:
@@ -127,7 +130,7 @@ def extract_heading(
 
 
 def extract_sidebar_text(
-    boxes: list[_BoxLike],
+    boxes: Sequence[_BoxLike],
     frame_h: int,
     frame_w: int,
 ) -> str:
@@ -180,7 +183,7 @@ def compute_part_b(frame: np.ndarray) -> int:
     hash invariant to overall brightness shifts.
     """
     from PIL import Image
-    from scipy.fft import dct
+    from scipy.fft import dct  # type: ignore[import-untyped]
 
     strip = _crop_header_strip(frame)
     if strip.size == 0:
@@ -217,7 +220,7 @@ class Fingerprint:
         return (self.url, self.heading, self.sidebar_text)
 
 
-def compute_fingerprint(frame: np.ndarray, boxes: list[_BoxLike]) -> Fingerprint:
+def compute_fingerprint(frame: np.ndarray, boxes: Sequence[_BoxLike]) -> Fingerprint:
     """Compute Part A + Part B for ``frame`` given its OCR word boxes."""
     h, w = frame.shape[:2]
     return Fingerprint(

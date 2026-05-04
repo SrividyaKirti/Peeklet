@@ -159,7 +159,9 @@ DEMO_SCREEN_SCHEMA = pa.schema(
 )
 
 
-def write_demo_manifest(screens: list[Screen], path, compression: str = "snappy") -> None:
+def write_demo_manifest(
+    screens: list[Screen], path: Path | str, compression: str = "snappy"
+) -> None:
     """Write one parquet row per unique demo screen."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

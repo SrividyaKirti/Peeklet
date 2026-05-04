@@ -11,7 +11,7 @@ _WATCH_URL_RE = re.compile(r"\[WATCH\]\((https?://[^)]+)\)")
 
 if TYPE_CHECKING:
     from peeklet.core.audio import TranscriptSegment
-    from peeklet.utils.types import FrameResult
+    from peeklet.utils.types import FrameResult, MomentEntry, Screen
 
 
 def format_timestamp(seconds: float) -> str:
@@ -241,9 +241,9 @@ def _format_mm_ss(seconds: float) -> str:
 def build_demo_context(
     filename: str,
     duration_s: float,
-    screens,  # list[Screen]
-    moments,  # list[MomentEntry]
-):
+    screens: list[Screen],
+    moments: list[MomentEntry],
+) -> dict[str, Any]:
     """Build the demo context.json structure (screens + moments)."""
     return {
         "video": {
@@ -280,7 +280,7 @@ def build_demo_context(
     }
 
 
-def write_demo_context_json(ctx, path):
+def write_demo_context_json(ctx: dict[str, Any], path: Path | str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(ctx, indent=2, ensure_ascii=False) + "\n")
@@ -288,11 +288,11 @@ def write_demo_context_json(ctx, path):
 
 def write_demo_context_markdown(
     *,
-    path,
+    path: Path | str,
     video_filename: str,
     duration_s: float,
-    screens,  # list[Screen]
-    moments,  # list[MomentEntry]
+    screens: list[Screen],
+    moments: list[MomentEntry],
 ) -> None:
     """Render the demo context.md format with shared image paths + backrefs."""
     path = Path(path)
