@@ -12,7 +12,7 @@ from PIL import Image
 if TYPE_CHECKING:
     import numpy as np
 
-    from peeklet.utils.types import FrameResult
+    from peeklet.utils.types import FrameResult, Screen
 
 MANIFEST_SCHEMA = pa.schema(
     [
@@ -58,8 +58,8 @@ MANIFEST_SCHEMA = pa.schema(
         pa.field("frame_height", pa.int32()),
         pa.field("source_format", pa.string(), nullable=True),
         pa.field("asset_path", pa.string(), nullable=True),
-        pa.field("pii_detected", pa.bool_(), nullable=True),
         pa.field("visual_reason", pa.string(), nullable=True),
+        pa.field("trigger_type", pa.string(), nullable=True),
         pa.field("prev_keyframe_id", pa.string(), nullable=True),
         pa.field("prev_keyframe_path", pa.string(), nullable=True),
         pa.field("source_video", pa.string(), nullable=True),
@@ -115,8 +115,8 @@ class ManifestWriter:
                 "frame_height": result.frame_height,
                 "source_format": result.source_format,
                 "asset_path": result.asset_path,
-                "pii_detected": result.pii_detected,
                 "visual_reason": result.visual_reason,
+                "trigger_type": result.trigger_type,
                 "prev_keyframe_id": result.prev_keyframe_id,
                 "prev_keyframe_path": result.prev_keyframe_path,
                 "source_video": result.source_video,
@@ -143,3 +143,40 @@ class ManifestWriter:
         table = pa.Table.from_pylist(self._rows, schema=MANIFEST_SCHEMA)
         pq.write_table(table, self._path, compression=self._compression)
         self._rows.clear()
+
+
+DEMO_SCREEN_SCHEMA = pa.schema(
+    [
+        pa.field("screen_id", pa.string()),
+        pa.field("image_path", pa.string()),
+        pa.field("first_seen_ms", pa.int64()),
+        pa.field("url", pa.string()),
+        pa.field("heading", pa.string()),
+        pa.field("sidebar_text", pa.string()),
+        pa.field("header_phash", pa.string()),  # 16-char lowercase hex
+        pa.field("ocr_text", pa.string()),
+    ]
+)
+
+
+def write_demo_manifest(
+    screens: list[Screen], path: Path | str, compression: str = "snappy"
+) -> None:
+    """Write one parquet row per unique demo screen."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "screen_id": s.screen_id,
+            "image_path": s.image_path,
+            "first_seen_ms": s.first_seen_ms,
+            "url": s.fingerprint.url,
+            "heading": s.fingerprint.heading,
+            "sidebar_text": s.fingerprint.sidebar_text,
+            "header_phash": f"{s.fingerprint.header_phash:016x}",
+            "ocr_text": s.ocr_text,
+        }
+        for s in screens
+    ]
+    table = pa.Table.from_pylist(rows, schema=DEMO_SCREEN_SCHEMA)
+    pq.write_table(table, path, compression=compression)

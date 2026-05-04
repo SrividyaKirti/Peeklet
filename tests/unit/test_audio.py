@@ -74,6 +74,135 @@ class TestParseVtt:
         assert segments[0].text == "First line"
 
 
+class TestParseFathomMd:
+    def test_parse_basic_fathom_md(self, tmp_path: Path) -> None:
+        md = tmp_path / "test.md"
+        md.write_text(
+            "## Some Title\n"
+            "\n"
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.56)++ - **Alice**  \n"
+            "Welcome everyone.  \n"
+            "\n"
+            "++[@0:03](https://fathom.video/calls/1?timestamp=3.0)++ - **Bob**  \n"
+            "Thanks for having me.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].start == 0.56
+        assert segments[0].end == 3.0
+        assert segments[0].text == "Welcome everyone."
+        assert segments[1].start == 3.0
+        assert segments[1].text == "Thanks for having me."
+
+    def test_duplicate_timestamp_lines_dedupe(self, tmp_path: Path) -> None:
+        # Fathom often emits the speaker line twice in a row
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.5)++ - **Alice**  \n"
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.5)++ - **Alice**  \n"
+            "Hello world.  \n"
+            "\n"
+            "++[@0:05](https://fathom.video/calls/1?timestamp=5.2)++ - **Bob**  \n"
+            "Yes, indeed.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].text == "Hello world."
+        assert segments[1].text == "Yes, indeed."
+
+    def test_multiline_segment(self, tmp_path: Path) -> None:
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Line one of the segment.  \n"
+            "Line two of the same segment.  \n"
+            "\n"
+            "++[@0:10](https://fathom.video/calls/1?timestamp=10.0)++ - **Bob**  \n"
+            "Next.  \n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert "Line one of the segment." in segments[0].text
+        assert "Line two of the same segment." in segments[0].text
+
+    def test_inline_watch_marker_does_not_split(self, tmp_path: Path) -> None:
+        # An action-item line embeds [WATCH](...?timestamp=...) inside speech.
+        # That must not split the segment.
+        md = tmp_path / "test.md"
+        watch_line = (
+            "**ACTION ITEM: do thing - "
+            "++[WATCH](https://fathom.video/calls/1?timestamp=361.99)++**  \n"
+        )
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Some speech that mentions a " + watch_line + "and continues.  \n"
+            "\n"
+            "++[@0:10](https://fathom.video/calls/1?timestamp=10.0)++ - **Bob**  \n"
+            "Next.  \n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].start == 0.0
+        assert "ACTION ITEM" in segments[0].text
+
+    def test_duplicate_action_item_line_dedup(self, tmp_path: Path) -> None:
+        # Fathom emits the same ACTION ITEM line twice on consecutive lines
+        # inside a speech segment. Accumulated verbatim this duplicates the
+        # anchor text in the joined segment content.
+        md = tmp_path / "test.md"
+        action_line = (
+            "**ACTION ITEM: Add Tasks link - "
+            "++[WATCH](https://fathom.video/calls/1?timestamp=133.99)++**  \n"
+        )
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Preamble speech.  \n" + action_line + action_line + "\n"
+            "++[@0:10](https://fathom.video/calls/1?timestamp=10.0)++ - **Bob**  \n"
+            "Next.  \n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].text.count("ACTION ITEM: Add Tasks link") == 1
+
+    def test_consecutive_duplicate_lines_collapsed(self, tmp_path: Path) -> None:
+        # Any consecutive identical non-empty line is collapsed — Fathom
+        # frequently emits duplicate anchor lines, and legitimate prose
+        # doesn't repeat verbatim across line breaks.
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.0)++ - **Alice**  \n"
+            "Same sentence here.  \n"
+            "Same sentence here.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 1
+        assert segments[0].text == "Same sentence here."
+
+    def test_speaker_extracted(self, tmp_path: Path) -> None:
+        md = tmp_path / "test.md"
+        md.write_text(
+            "++[@0:00](https://fathom.video/calls/1?timestamp=0.56)++ - **Alice**  \n"
+            "Welcome everyone.  \n"
+            "\n"
+            "++[@0:03](https://fathom.video/calls/1?timestamp=3.0)++ - **Bob Smith**  \n"
+            "Thanks for having me.  \n"
+            "\n"
+        )
+        segments = parse_transcript(md)
+        assert len(segments) == 2
+        assert segments[0].speaker == "Alice"
+        assert segments[1].speaker == "Bob Smith"
+
+    def test_srt_has_no_speaker(self, tmp_path: Path) -> None:
+        srt_file = tmp_path / "test.srt"
+        srt_file.write_text("1\n00:00:01,000 --> 00:00:03,500\nHello world\n\n")
+        segments = parse_transcript(srt_file)
+        assert segments[0].speaker is None
+
+
 class TestAlignTranscript:
     def test_align_finds_overlapping_segment(self) -> None:
         segments = [
@@ -99,6 +228,46 @@ class TestAlignTranscript:
 
     def test_align_empty_segments(self) -> None:
         assert align_transcript(1.0, []) is None
+
+
+class TestParseFathomAnchors:
+    def test_extracts_action_items_with_watch_timestamps(self) -> None:
+        from peeklet.core.audio import parse_fathom_anchors
+
+        text = (
+            "**ACTION ITEM: Fix missing assistant prompt - "
+            "++[WATCH](https://fathom.video/calls/123?timestamp=232.9999)++**\n"
+            "**ACTION ITEM: Fix missing assistant prompt - "
+            "++[WATCH](https://fathom.video/calls/123?timestamp=232.9999)++**\n"
+            "Some other text\n"
+            "**ACTION ITEM: Investigate Policy Health guard-flag issue; fix - "
+            "++[WATCH](https://fathom.video/calls/123?timestamp=455.9999)++**\n"
+        )
+        anchors = parse_fathom_anchors(text)
+
+        assert len(anchors) == 2  # deduped consecutive duplicate
+        assert anchors[0].timestamp == pytest.approx(232.9999)
+        assert anchors[0].source == "anchor"
+        assert "Fix missing assistant prompt" in anchors[0].visual_context_goal
+        assert anchors[1].timestamp == pytest.approx(455.9999)
+
+    def test_returns_empty_on_no_action_items(self) -> None:
+        from peeklet.core.audio import parse_fathom_anchors
+
+        text = "Just some regular transcript text with no action items.\n"
+        assert parse_fathom_anchors(text) == []
+
+    def test_sorted_by_timestamp(self) -> None:
+        from peeklet.core.audio import parse_fathom_anchors
+
+        text = (
+            "**ACTION ITEM: Second - "
+            "++[WATCH](https://fathom.video/calls/1?timestamp=500.0)++**\n"
+            "**ACTION ITEM: First - "
+            "++[WATCH](https://fathom.video/calls/1?timestamp=100.0)++**\n"
+        )
+        anchors = parse_fathom_anchors(text)
+        assert [a.timestamp for a in anchors] == [100.0, 500.0]
 
 
 @pytest.mark.skipif(not _has_pydub, reason="requires peeklet[video]")

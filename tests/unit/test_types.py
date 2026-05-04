@@ -1,6 +1,6 @@
 """Tests for shared type definitions."""
 
-from peeklet.utils.types import EventType, FrameMeta, FrameResult, Region
+from peeklet.utils.types import EventType, FrameMeta, FrameResult, Moment, Region
 
 
 class TestRegion:
@@ -66,7 +66,6 @@ class TestFrameResult:
             adaptive_mask=[Region(x=0, y=0, w=32, h=32)],
             frame_width=1920,
             frame_height=1080,
-            pii_detected=False,
         )
         assert result.is_keyframe is True
         assert result.event_type == EventType.KEYFRAME
@@ -110,6 +109,7 @@ class TestFrameResultVideoFields:
         assert result.total_keyframes is None
         assert result.video_duration is None
         assert result.change_magnitude is None
+        assert result.trigger_type is None
 
     def test_video_fields_set_explicitly(self) -> None:
         result = FrameResult(
@@ -129,6 +129,7 @@ class TestFrameResultVideoFields:
             total_keyframes=42,
             video_duration=120.0,
             change_magnitude="major",
+            trigger_type="visual_change",
         )
         assert result.source_video == "/path/to/video.mp4"
         assert result.video_timestamp == 12.5
@@ -140,3 +141,128 @@ class TestFrameResultVideoFields:
         assert result.total_keyframes == 42
         assert result.video_duration == 120.0
         assert result.change_magnitude == "major"
+        assert result.trigger_type == "visual_change"
+
+
+def test_moment_basic():
+    seg = Moment(
+        timestamp=12.5,
+        visual_context_goal="Settings page open",
+        textual_anchor="speaker says 'show settings'",
+        downstream_utility="Capture the settings panel",
+    )
+    assert seg.timestamp == 12.5
+    assert seg.visual_context_goal == "Settings page open"
+    assert seg.textual_anchor == "speaker says 'show settings'"
+    assert seg.downstream_utility == "Capture the settings panel"
+
+
+def test_moment_is_frozen():
+    import pytest
+
+    seg = Moment(
+        timestamp=0.0,
+        visual_context_goal="x",
+        textual_anchor="y",
+        downstream_utility="z",
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        seg.timestamp = 1.0  # type: ignore[misc]
+
+
+def test_moment_new_fields():
+    from peeklet.utils.types import Moment
+
+    m = Moment(
+        timestamp=12.5,
+        visual_context_goal="Dashboard with cost breakdown",
+        textual_anchor="Let me show you the estimated cost",
+        downstream_utility="To extract specific cost values",
+    )
+    assert m.timestamp == 12.5
+    assert m.visual_context_goal == "Dashboard with cost breakdown"
+    assert m.textual_anchor == "Let me show you the estimated cost"
+    assert m.downstream_utility == "To extract specific cost values"
+    assert m.source == "llm"  # default
+
+
+def test_moment_anchor_source():
+    from peeklet.utils.types import Moment
+
+    m = Moment(
+        timestamp=232.0,
+        visual_context_goal="Analytics interaction breakdown",
+        textual_anchor="ACTION ITEM: Fix missing assistant prompt",
+        downstream_utility="Action item flagged by meeting tool",
+        source="anchor",
+    )
+    assert m.source == "anchor"
+
+
+def test_frame_result_demo_fields_default_none():
+    from peeklet.utils.types import EventType, FrameResult
+
+    r = FrameResult(
+        frame_id="f",
+        event_type=EventType.SKIPPED,
+        is_keyframe=False,
+        perceptual_hash="0" * 16,
+        frame_width=10,
+        frame_height=10,
+    )
+    assert r.visual_context_goal is None
+    assert r.textual_anchor is None
+    assert r.downstream_utility is None
+    assert r.moment_source is None
+
+
+def test_screen_dataclass_holds_required_fields():
+    from peeklet.core.fingerprint import Fingerprint
+    from peeklet.utils.types import Screen
+
+    fp = Fingerprint(url="u", heading="h", sidebar_text="s", header_phash=0)
+    screen = Screen(
+        screen_id="screen_001",
+        image_path="demo_0001_00057433ms.jpg",
+        first_seen_ms=57433,
+        fingerprint=fp,
+        ocr_text="raw OCR text",
+    )
+    assert screen.screen_id == "screen_001"
+    assert screen.first_seen_ms == 57433
+    assert screen.fingerprint is fp
+
+
+def test_moment_entry_holds_required_fields():
+    from peeklet.utils.types import MomentEntry
+
+    m = MomentEntry(
+        timestamp_ms=132033,
+        caption="Vidya configures Bug filter",
+        type="action_item",
+        screen_id="screen_007",
+        image_unavailable=False,
+    )
+    assert m.timestamp_ms == 132033
+    assert m.screen_id == "screen_007"
+    assert m.image_unavailable is False
+
+
+def test_moment_entry_image_unavailable_implies_screen_id_none():
+    """The dedup pipeline emits screen_id=None when image_unavailable is True.
+
+    The dataclass itself does not enforce this — it's an output-pipeline
+    invariant — but exercise the documented combination so future
+    refactors keep it intact.
+    """
+    from peeklet.utils.types import MomentEntry
+
+    m = MomentEntry(
+        timestamp_ms=1000,
+        caption="quality gate failed",
+        type="action_item",
+        screen_id=None,
+        image_unavailable=True,
+    )
+    assert m.screen_id is None
+    assert m.image_unavailable is True

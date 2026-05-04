@@ -14,7 +14,6 @@ from peeklet.config import (
     HasherConfig,
     MaskingConfig,
     PeekletConfig,
-    PiiPattern,
     load_config,
 )
 from peeklet.core.comparator import ComparisonResult, compare_frames
@@ -27,12 +26,6 @@ from peeklet.core.hasher import (
 )
 from peeklet.core.loader import load_frame
 from peeklet.core.masking import AdaptiveMask
-from peeklet.core.redactor import (
-    BUILTIN_PATTERNS,
-    build_pattern_set,
-    find_pii_in_text,
-    redact_regions,
-)
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import compute_block_grid, crop_region, ensure_rgb_uint8
 from peeklet.utils.types import EventType, FrameResult, Region
@@ -434,84 +427,6 @@ class TestAdaptiveMaskEdgeCases:
         assert len(regions) == 25  # 5x5 blocks
 
 
-# ── Redactor edge cases ───────────────────────────────────────────────────
-
-
-class TestRedactorEdgeCases:
-    def test_empty_text(self) -> None:
-        matches = find_pii_in_text("", BUILTIN_PATTERNS)
-        assert matches == []
-
-    def test_multiple_pii_same_type(self) -> None:
-        text = "Contact john@example.com or jane@example.com"
-        matches = find_pii_in_text(text, BUILTIN_PATTERNS)
-        email_matches = [m for m in matches if m.pattern_name == "email"]
-        assert len(email_matches) == 2
-
-    def test_overlapping_patterns(self) -> None:
-        """SSN format 123-45-6789 could partly match phone pattern."""
-        text = "SSN: 123-45-6789"
-        matches = find_pii_in_text(text, BUILTIN_PATTERNS)
-        pattern_names = {m.pattern_name for m in matches}
-        assert "ssn" in pattern_names
-
-    def test_pattern_with_empty_regex(self) -> None:
-        """A pattern with empty regex should be skipped."""
-        patterns = [PiiPattern(name="empty", regex="", description="empty")]
-        matches = find_pii_in_text("some text", patterns)
-        assert matches == []
-
-    def test_redact_region_at_boundary(self) -> None:
-        """Region touching frame edges."""
-        frame = np.full((100, 100, 3), 200, dtype=np.uint8)
-        region = Region(x=0, y=0, w=100, h=100)
-        redacted = redact_regions(frame, [region])
-        assert np.all(redacted == 0)
-
-    def test_redact_region_partially_outside(self) -> None:
-        """Region extending beyond frame bounds should be clamped."""
-        frame = np.full((50, 50, 3), 200, dtype=np.uint8)
-        region = Region(x=40, y=40, w=30, h=30)
-        redacted = redact_regions(frame, [region])
-        assert np.all(redacted[40:50, 40:50] == 0)
-        assert np.all(redacted[0:30, 0:30] == 200)
-
-    def test_redact_negative_coords(self) -> None:
-        """Negative region coords should be clamped to 0."""
-        frame = np.full((50, 50, 3), 200, dtype=np.uint8)
-        region = Region(x=-10, y=-10, w=20, h=20)
-        redacted = redact_regions(frame, [region])
-        assert np.all(redacted[0:10, 0:10] == 0)
-
-    def test_redact_multiple_regions(self) -> None:
-        frame = np.full((100, 100, 3), 200, dtype=np.uint8)
-        regions = [Region(x=0, y=0, w=20, h=20), Region(x=50, y=50, w=20, h=20)]
-        redacted = redact_regions(frame, regions)
-        assert np.all(redacted[0:20, 0:20] == 0)
-        assert np.all(redacted[50:70, 50:70] == 0)
-        assert np.all(redacted[25:45, 25:45] == 200)
-
-    def test_build_pattern_set_empty_types(self) -> None:
-        """No types requested => empty set."""
-        patterns = build_pattern_set(pii_types=[], custom_patterns=[])
-        assert patterns == []
-
-    def test_build_pattern_set_unknown_type(self) -> None:
-        """Requesting unknown type => excluded (no error)."""
-        patterns = build_pattern_set(pii_types=["nonexistent"], custom_patterns=[])
-        assert patterns == []
-
-    def test_address_pattern_match(self) -> None:
-        text = "Located at 123 Main Street"
-        matches = find_pii_in_text(text, BUILTIN_PATTERNS)
-        assert any(m.pattern_name == "address" for m in matches)
-
-    def test_credit_card_with_spaces(self) -> None:
-        text = "Card: 4111 1111 1111 1111"
-        matches = find_pii_in_text(text, BUILTIN_PATTERNS)
-        assert any(m.pattern_name == "credit_card" for m in matches)
-
-
 # ── Config edge cases ─────────────────────────────────────────────────────
 
 
@@ -730,7 +645,6 @@ class TestPipelineEdgeCases:
     def config(self, tmp_output: Path) -> PeekletConfig:
         return PeekletConfig.model_validate(
             {
-                "redactor": {"enabled": False},
                 "exporter": {"output_dir": str(tmp_output)},
                 "masking": {"block_size": 32, "window_size": 5, "noise_threshold": 0.8},
                 "comparator": {"ssim_threshold": 0.85, "min_changed_blocks": 3},
@@ -877,7 +791,6 @@ class TestPipelineTiledEdgeCases:
     def tiled_config(self, tmp_output: Path) -> PeekletConfig:
         return PeekletConfig.model_validate(
             {
-                "redactor": {"enabled": False},
                 "exporter": {"output_dir": str(tmp_output)},
                 "masking": {"block_size": 32, "window_size": 5, "noise_threshold": 0.8},
                 "comparator": {"ssim_threshold": 0.85, "min_changed_blocks": 2},

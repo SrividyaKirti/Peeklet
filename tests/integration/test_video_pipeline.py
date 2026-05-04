@@ -1,5 +1,6 @@
 """Integration tests for video input end-to-end."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,6 @@ class TestVideoEndToEnd:
 
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
-        config.redactor.enabled = False
 
         results = process_video(video_path, config)
 
@@ -81,7 +81,9 @@ class TestVideoEndToEnd:
 
         # Check keyframe images exist
         output_dir = tmp_path / "output"
-        keyframe_images = list(output_dir.glob("step_*.png"))
+        keyframe_images = list(output_dir.glob("screenshot_*.jpg")) + list(
+            output_dir.glob("screenshot_*.png")
+        )
         assert len(keyframe_images) >= 2
 
     def test_video_with_transcript(self, tmp_path: Path) -> None:
@@ -103,7 +105,6 @@ class TestVideoEndToEnd:
 
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
-        config.redactor.enabled = False
         config.video.transcript_path = str(srt_path)
 
         results = process_video(video_path, config)
@@ -123,7 +124,6 @@ class TestVideoEndToEnd:
 
         config = PeekletConfig()
         config.exporter.output_dir = str(tmp_path / "output")
-        config.redactor.enabled = False
 
         # Process both videos (simulating CLI multi-video behavior)
         all_results = []
@@ -134,3 +134,23 @@ class TestVideoEndToEnd:
         videos = {r.source_video for r in all_results if r.source_video}
         assert "a.mp4" in videos
         assert "b.mp4" in videos
+
+
+class TestVideoContextExport:
+    def test_video_without_transcript_still_produces_context(self, tmp_path: Path) -> None:
+        """Video without transcript still produces context.json + context.md."""
+        frames = [_solid_frame((0, 0, 0))] * 30 + [_solid_frame((255, 255, 255))] * 30
+        video_path = _make_test_video(tmp_path / "demo.mp4", frames, fps=30)
+
+        config = PeekletConfig()
+        config.exporter.output_dir = str(tmp_path / "output")
+
+        process_video(video_path, config)
+
+        output_dir = tmp_path / "output"
+        assert (output_dir / "context.json").exists()
+        assert (output_dir / "context.md").exists()
+
+        ctx = json.loads((output_dir / "context.json").read_text())
+        assert ctx["transcript"] == []
+        assert ctx["video"]["total_screenshots"] >= 1

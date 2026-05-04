@@ -8,13 +8,17 @@ import yaml
 from pydantic import ValidationError
 
 from peeklet.config import (
+    QUALITY_PRESETS,
+    SENSITIVITY_PRESETS,
     ComparatorConfig,
     HasherConfig,
     MaskingConfig,
     PeekletConfig,
     PipelineConfig,
+    VideoConfig,
+    apply_quality_preset,
+    apply_sensitivity_preset,
     load_config,
-    load_patterns,
 )
 
 
@@ -27,8 +31,7 @@ class TestDefaults:
         assert config.masking.noise_threshold == 0.8
         assert config.hasher.algorithm == "phash"
         assert config.comparator.ssim_threshold == 0.85
-        assert config.redactor.enabled is True
-        assert config.exporter.keyframe_format == "png"
+        assert config.exporter.keyframe_format == "jpg"
         assert config.exporter.parquet_compression == "snappy"
 
     def test_pipeline_defaults(self) -> None:
@@ -73,6 +76,21 @@ class TestValidation:
     def test_reject_negative_min_changed_blocks(self) -> None:
         with pytest.raises(ValueError):
             ComparatorConfig(min_changed_blocks=-1)
+
+    def test_processing_max_dim_rejects_tiny_values(self) -> None:
+        """processing_max_dim below 64 is silently broken — must error."""
+        with pytest.raises(ValidationError):
+            VideoConfig(processing_max_dim=10)
+
+    def test_processing_max_dim_accepts_64(self) -> None:
+        """64 is the minimum; anything below it errors."""
+        config = VideoConfig(processing_max_dim=64)
+        assert config.processing_max_dim == 64
+
+    def test_processing_max_dim_accepts_none(self) -> None:
+        """None still means 'no downscaling' — must remain valid."""
+        config = VideoConfig(processing_max_dim=None)
+        assert config.processing_max_dim is None
 
 
 class TestLoadConfig:
@@ -153,38 +171,162 @@ class TestVideoConfig:
         assert config.video.transcript_path == "/tmp/captions.srt"
 
 
-class TestPatternLoading:
-    def test_load_custom_patterns(self, tmp_path: Path) -> None:
-        patterns_data = {
-            "patterns": [
-                {
-                    "name": "employee_id",
-                    "regex": r"EMP-\d{6}",
-                    "description": "Employee ID",
-                },
-            ]
-        }
-        patterns_file = tmp_path / "patterns.yaml"
-        patterns_file.write_text(yaml.dump(patterns_data))
+def test_demo_filter_config_defaults():
+    cfg = PeekletConfig()
+    assert cfg.demo_filter.enabled is False
+    assert cfg.demo_filter.llm_provider == "anthropic"
+    assert cfg.demo_filter.llm_model == "claude-haiku-4-5"
+    assert cfg.demo_filter.gallery_ocr_min_dim == 1920
+    assert cfg.demo_filter.tail_skip_ratio == 0.02
 
-        patterns = load_patterns(patterns_file)
-        assert len(patterns) == 1
-        assert patterns[0].name == "employee_id"
-        assert patterns[0].regex == r"EMP-\d{6}"
-        assert patterns[0].enabled is True
 
-    def test_disabled_pattern(self, tmp_path: Path) -> None:
-        patterns_data = {
-            "patterns": [
-                {"name": "ssn", "enabled": False},
-            ]
-        }
-        patterns_file = tmp_path / "patterns.yaml"
-        patterns_file.write_text(yaml.dump(patterns_data))
+def test_demo_filter_config_rejects_unknown_provider():
+    import pytest
+    from pydantic import ValidationError
 
-        patterns = load_patterns(patterns_file)
-        assert patterns[0].enabled is False
+    from peeklet.config import DemoFilterConfig
 
-    def test_load_missing_patterns_file_raises(self) -> None:
-        with pytest.raises(FileNotFoundError):
-            load_patterns(Path("/nonexistent/patterns.yaml"))
+    with pytest.raises(ValidationError):
+        DemoFilterConfig(llm_provider="cohere")  # type: ignore[arg-type]
+
+
+class TestQualityPresets:
+    def test_quality_presets_exist(self) -> None:
+        assert set(QUALITY_PRESETS.keys()) == {"fast", "balanced", "precise"}
+
+    def test_apply_quality_preset_balanced_matches_current_defaults(self) -> None:
+        """The 'balanced' preset must match today's default values exactly,
+        so users who don't pass --quality see no behavior change."""
+        config = PeekletConfig()
+        baseline_max_dim = config.video.processing_max_dim
+        baseline_sample_fps = config.video.sample_fps
+
+        apply_quality_preset(config, "balanced")
+
+        assert config.video.processing_max_dim == baseline_max_dim
+        assert config.video.sample_fps == baseline_sample_fps
+
+    def test_apply_quality_preset_fast(self) -> None:
+        config = PeekletConfig()
+        apply_quality_preset(config, "fast")
+
+        assert config.video.processing_max_dim == 480
+        assert config.video.sample_fps == 0.5
+
+    def test_apply_quality_preset_precise(self) -> None:
+        config = PeekletConfig()
+        apply_quality_preset(config, "precise")
+
+        assert config.video.processing_max_dim == 1080
+        assert config.video.sample_fps == 2.0
+
+    def test_apply_quality_preset_invalid_raises(self) -> None:
+        config = PeekletConfig()
+        with pytest.raises(ValueError, match="unknown quality preset"):
+            apply_quality_preset(config, "ludicrous")
+
+
+class TestSensitivityPresets:
+    def test_sensitivity_presets_exist(self) -> None:
+        assert set(SENSITIVITY_PRESETS.keys()) == {"low", "medium", "high"}
+
+    def test_apply_sensitivity_medium_matches_current_defaults(self) -> None:
+        """'medium' must match today's defaults so unflagged users see no change."""
+        config = PeekletConfig()
+        baseline_ssim = config.comparator.ssim_threshold
+        baseline_pct = config.comparator.min_changed_pct
+        baseline_blocks = config.comparator.min_changed_blocks
+
+        apply_sensitivity_preset(config, "medium")
+
+        assert config.comparator.ssim_threshold == baseline_ssim
+        assert config.comparator.min_changed_pct == baseline_pct
+        assert config.comparator.min_changed_blocks == baseline_blocks
+
+    def test_apply_sensitivity_low(self) -> None:
+        """'low' = fewer keyframes (stricter thresholds)."""
+        config = PeekletConfig()
+        apply_sensitivity_preset(config, "low")
+
+        assert config.comparator.ssim_threshold == 0.92
+        assert config.comparator.min_changed_pct == 5.0
+        assert config.comparator.min_changed_blocks == 5
+
+    def test_apply_sensitivity_high(self) -> None:
+        """'high' = more keyframes (looser thresholds)."""
+        config = PeekletConfig()
+        apply_sensitivity_preset(config, "high")
+
+        assert config.comparator.ssim_threshold == 0.75
+        assert config.comparator.min_changed_pct == 1.0
+        assert config.comparator.min_changed_blocks == 2
+
+    def test_apply_sensitivity_invalid_raises(self) -> None:
+        config = PeekletConfig()
+        with pytest.raises(ValueError, match="unknown sensitivity preset"):
+            apply_sensitivity_preset(config, "extreme")
+
+
+class TestDemoFilterLayoutConfig:
+    def test_defaults(self) -> None:
+        from peeklet.config import DemoFilterConfig
+
+        cfg = DemoFilterConfig()
+        assert cfg.min_text_lines == 10
+        assert cfg.min_grid_cells == 12
+        assert cfg.min_edge_ratio == 0.020
+
+    def test_thresholds_validated(self) -> None:
+        from peeklet.config import DemoFilterConfig
+
+        with pytest.raises(ValidationError):
+            DemoFilterConfig(min_text_lines=-1)
+        with pytest.raises(ValidationError):
+            DemoFilterConfig(min_edge_ratio=-0.1)
+
+
+def test_demo_filter_config_has_phash_threshold_default_6():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.phash_threshold == 6
+
+
+def test_demo_filter_config_has_ocr_field_min_chars_default_2():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.ocr_field_min_chars == 2
+
+
+def test_demo_filter_config_has_quality_fallback_defaults():
+    from peeklet.config import DemoFilterConfig
+
+    cfg = DemoFilterConfig()
+    assert cfg.quality_fallback_max_attempts == 8
+    assert cfg.quality_fallback_half_window_seconds == 4.0
+    assert cfg.quality_fallback_step_seconds == 1.0
+
+
+def test_demo_filter_config_rejects_removed_fields():
+    """SSIM dedup, pHash dedup, and the per-moment search window are gone.
+
+    A config file that still supplies them must fail validation rather
+    than silently ignore — that gives users a clear signal to update.
+    """
+    import pydantic
+
+    from peeklet.config import DemoFilterConfig
+
+    for field in (
+        "dedup_ssim_threshold",
+        "phash_hamming_threshold",
+        "forward_search_window_max_sec",
+        "forward_search_step_sec",
+        "search_window_lookback_sec",
+        "ssim_stability_threshold",
+        "frame_search_resolution",
+        "gallery_min_words",
+    ):
+        with pytest.raises(pydantic.ValidationError):
+            DemoFilterConfig(**{field: 0.5})

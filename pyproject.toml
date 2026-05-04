@@ -1,7 +1,7 @@
 [project]
 name = "peeklet"
 version = "0.1.0"
-description = "Smart screenshot change detection — filters noise, redacts PII, exports structured keyframe manifests"
+description = "Smart screenshot change detection — filters noise, exports structured keyframe manifests with LLM-ready context"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -33,14 +33,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ocr = [
-    "easyocr>=1.7",
-    "pymupdf>=1.23",
-]
 video = [
     "imageio[ffmpeg]>=2.31",
     "av>=14.0",
     "pydub>=0.25",
+]
+demo = [
+    "openai>=1.0",
+    "anthropic>=0.40",
+    "pytesseract>=0.3.10",
 ]
 dev = [
     "pytest>=7.0",
@@ -94,7 +95,9 @@ module = [
     "imageio.*",
     "imageio_ffmpeg.*",
     "pydub.*",
-    "easyocr.*",
+    "pytesseract.*",
+    "openai.*",
+    "anthropic.*",
 ]
 ignore_missing_imports = true
 disallow_untyped_calls = false
@@ -108,6 +111,8 @@ markers = [
     "showui: tests requiring ShowUI dataset (deselect with '-m not showui')",
     "webui: tests requiring WebUI dataset (deselect with '-m not webui')",
     "benchmark: performance benchmark tests",
+    "rejector_live: this test exercises the real layout rejector (don't autouse-stub)",
+    "slow: long-running integration tests (use -m slow to run)",
 ]
 
 [dependency-groups]

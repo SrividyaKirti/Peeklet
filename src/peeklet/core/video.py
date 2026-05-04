@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -14,9 +15,19 @@ from peeklet.core.audio import (
     get_audio_activity,
     parse_transcript,
 )
-from peeklet.core.exporter import ManifestWriter
+from peeklet.core.context_exporter import (
+    build_context,
+    timestamp_filename,
+    write_context_json,
+    write_context_markdown,
+)
+from peeklet.core.demo_filter import apply_demo_filter
+from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.pipeline import Pipeline
 from peeklet.utils.image import ensure_rgb_uint8
+from peeklet.utils.types import EventType
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -88,9 +99,12 @@ class VideoDecoder:
     def extract_coarse_frames(
         self, sample_fps: float = 1.0
     ) -> Iterator[tuple[np.ndarray, float, int]]:
-        """Extract frames at a coarse sample rate.
+        """Extract frames at a coarse sample rate using sequential decode.
 
         Yields (frame_rgb, timestamp_seconds, frame_number) tuples.
+
+        Note: This decodes every frame and discards most. Prefer
+        :meth:`iter_coarse_frames_seek` for long videos.
         """
         import imageio.v3 as iio
 
@@ -102,6 +116,62 @@ class VideoDecoder:
             timestamp = idx / self._fps
             rgb = ensure_rgb_uint8(np.asarray(frame))
             yield rgb, timestamp, idx
+
+    def iter_coarse_frames_seek(
+        self, sample_fps: float = 1.0, max_dim: int | None = None
+    ) -> Iterator[tuple[np.ndarray, float, int]]:
+        """Extract frames at a coarse sample rate using a single sequential
+        pyav decode, yielding only the frames that fall on the sample grid.
+
+        This is much faster than :meth:`extract_coarse_frames` because:
+        - The codec still walks packets, but we never copy skipped frames into
+          Python (no numpy materialization).
+        - When ``max_dim`` is provided, downscaling is performed inside pyav's
+          C code via libswscale, avoiding a separate PIL resize step and
+          reducing the cost of ``to_ndarray``.
+
+        Args:
+            sample_fps: Coarse sample rate in frames per second.
+            max_dim: If set, downscale frames so the largest dimension is at
+                most this many pixels. Done inside pyav for speed.
+
+        Yields (frame_rgb, timestamp_seconds, frame_number) tuples.
+        """
+        import av
+
+        container = av.open(str(self._path))
+        try:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"  # enable multi-threaded decoding
+
+            # Pre-compute target dimensions if downscaling
+            target_w: int | None = None
+            target_h: int | None = None
+            if max_dim is not None and max(self._width, self._height) > max_dim:
+                scale = max_dim / max(self._width, self._height)
+                target_w = int(round(self._width * scale))
+                target_h = int(round(self._height * scale))
+
+            interval = 1.0 / sample_fps
+            next_target = 0.0
+
+            for frame in container.decode(stream):
+                if frame.pts is None or stream.time_base is None:
+                    continue
+                ts = float(frame.pts * stream.time_base)
+                if ts + 1e-6 < next_target:
+                    continue
+                # Reformat (and downscale) inside pyav before materializing.
+                if target_w is not None:
+                    arr = frame.to_ndarray(format="rgb24", width=target_w, height=target_h)
+                else:
+                    arr = frame.to_ndarray(format="rgb24")
+                rgb = ensure_rgb_uint8(np.asarray(arr))
+                frame_num = int(round(ts * self._fps))
+                yield rgb, ts, frame_num
+                next_target = ts + interval
+        finally:
+            container.close()
 
     def extract_frame_range(
         self, start_frame: int, end_frame: int
@@ -135,6 +205,48 @@ class VideoDecoder:
 
         container.close()
 
+    def extract_frame_at(self, timestamp_sec: float) -> tuple[np.ndarray, float, int]:
+        """Extract a single frame at (or just after) ``timestamp_sec``.
+
+        Seeks to the nearest keyframe before the requested timestamp via
+        libav and decodes forward until a frame at-or-past the target is
+        found. Returns ``(frame_rgb, actual_timestamp, frame_number)``.
+
+        Used by demo-mode's sparse OCR sweep where we only need a few
+        frames spread across the video, not a continuous range.
+
+        Raises:
+            RuntimeError: if no frame can be decoded at or after the
+                requested timestamp (e.g., timestamp past end of video).
+        """
+        import av
+
+        container = av.open(str(self._path))
+        try:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+
+            target_ts = int(timestamp_sec * av.time_base)
+            container.seek(target_ts)
+
+            for frame in container.decode(stream):
+                if frame.pts is None or stream.time_base is None:
+                    continue
+                ts = float(frame.pts * stream.time_base)
+                if ts + 1e-6 < timestamp_sec:
+                    continue
+                arr = frame.to_ndarray(format="rgb24")
+                rgb = ensure_rgb_uint8(np.asarray(arr))
+                frame_num = int(round(ts * self._fps))
+                return rgb, ts, frame_num
+
+            raise RuntimeError(
+                f"No frame found at or after timestamp {timestamp_sec}s "
+                f"in {self._path.name} (duration={self._duration}s)"
+            )
+        finally:
+            container.close()
+
 
 def _change_magnitude(result: FrameResult) -> str:
     """Derive change magnitude from SSIM and block count."""
@@ -148,29 +260,64 @@ def _change_magnitude(result: FrameResult) -> str:
     return "minor"
 
 
+def _should_force_keyframe(
+    timestamp: float, forced_timestamps: list[float], tolerance: float = 0.5
+) -> bool:
+    """Check if a frame timestamp is close enough to a forced timestamp."""
+    return any(abs(timestamp - ft) <= tolerance for ft in forced_timestamps)
+
+
+def _merge_trigger_type(
+    is_visual: bool, is_transcript: bool
+) -> Literal["visual_change", "transcript_trigger", "both"] | None:
+    """Determine trigger_type from visual and transcript flags."""
+    if is_visual and is_transcript:
+        return "both"
+    if is_visual:
+        return "visual_change"
+    if is_transcript:
+        return "transcript_trigger"
+    return None
+
+
 def process_video(
     path: Path,
     config: PeekletConfig,
     writer: ManifestWriter | None = None,
+    forced_timestamps: list[float] | None = None,
 ) -> list[FrameResult]:
-    """Process a video file through smart sampling + Peeklet pipeline.
+    """Process a video file through coarse sampling + Peeklet pipeline.
 
-    Two-pass strategy:
-    1. Coarse pass at config.video.sample_fps
-    2. Backfill around SKIP->KEYFRAME transitions at native fps
+    Streaming single-pass implementation:
+    - Decodes one frame per ``config.video.sample_fps`` interval, no frame
+      buffer accumulation (memory-bounded for arbitrarily long videos).
+    - Optionally downscales frames to ``config.video.processing_max_dim``
+      before they hit the pipeline (default 720) so masking, hashing, and
+      SSIM stay fast on HD/4K sources.
+    - Optional native-fps backfill around visual transitions can be enabled
+      via ``config.video.enable_backfill`` (off by default).
 
     Args:
         path: Path to video file.
         config: Peeklet configuration.
         writer: Optional shared ManifestWriter for multi-video processing.
             If None, a new writer is created and flushed automatically.
+        forced_timestamps: Optional list of timestamps in seconds at which
+            keyframes should be forced regardless of visual change. Typically
+            derived from transcript trigger words.
 
-    Returns list of FrameResult for all processed frames.
+    Returns list of FrameResult for all processed (sampled) frames.
+
+    Note:
+        ``process_video()`` always writes ``context.json`` and ``context.md``
+        to the configured output directory.
     """
     decoder = VideoDecoder(path)
     meta = decoder.get_metadata()
     sample_fps = config.video.sample_fps
     output_dir = Path(config.exporter.output_dir)
+    max_dim = config.video.processing_max_dim
+    forced_ts = forced_timestamps or []
 
     owns_writer = writer is None
     if writer is None:
@@ -179,62 +326,101 @@ def process_video(
             compression=config.exporter.parquet_compression,
         )
 
-    # --- Pass 1: Coarse sampling to find transitions ---
-    # Use a throwaway pipeline (writes to /dev/null) just for keyframe decisions
-    coarse_config = config.model_copy(deep=True)
-    coarse_config.exporter.output_dir = str(output_dir / ".coarse_tmp")
-    coarse_pipeline = Pipeline(coarse_config)
-    coarse_samples: list[tuple[np.ndarray, float, int, FrameResult]] = []
-
-    for frame, ts, frame_num in decoder.extract_coarse_frames(sample_fps):
-        frame_id = f"coarse_{frame_num:06d}"
-        result = coarse_pipeline.process_frame(
-            frame,
-            frame_id=frame_id,
-            source_format="video",
+    # Demo mode: bypass the coarse pass entirely. The LLM picks moments,
+    # Stage B picks frames, and we write outputs directly.
+    if config.demo_filter.enabled:
+        from peeklet.core.context_exporter import (
+            build_demo_context,
+            write_demo_context_json,
+            write_demo_context_markdown,
         )
-        coarse_samples.append((frame, ts, frame_num, result))
+        from peeklet.core.exporter import write_demo_manifest
 
-    # --- Pass 2: Build final frame list with backfill ---
-    all_frames: list[tuple[np.ndarray, float, int]] = []
+        demo_transcript: list[TranscriptSegment] = []
+        transcript_text = ""
+        if config.video.transcript_path:
+            transcript_text = Path(config.video.transcript_path).read_text(encoding="utf-8")
+            demo_transcript = parse_transcript(Path(config.video.transcript_path))
 
-    for i, (frame, ts, frame_num, result) in enumerate(coarse_samples):
-        if i > 0:
-            prev_result = coarse_samples[i - 1][3]
-            prev_frame_num = coarse_samples[i - 1][2]
-            # SKIP -> KEYFRAME: backfill the gap at native fps
-            # Note: extract_frame_range iterates from frame 0. For long videos,
-            # consider using pyav seeking for better performance.
-            if not prev_result.is_keyframe and result.is_keyframe:
-                for bf_frame, bf_ts, bf_num in decoder.extract_frame_range(
-                    prev_frame_num + 1, frame_num
-                ):
-                    all_frames.append((bf_frame, bf_ts, bf_num))
-        all_frames.append((frame, ts, frame_num))
+        screens, moments = apply_demo_filter(
+            decoder=decoder,
+            transcript=demo_transcript,
+            config=config.demo_filter,
+            output_dir=output_dir,
+            transcript_text=transcript_text,
+        )
 
-    # Clean up coarse pass artifacts
-    coarse_dir = output_dir / ".coarse_tmp"
-    if coarse_dir.exists():
-        import shutil
+        ctx = build_demo_context(
+            meta.filename,
+            meta.duration,
+            screens=screens,
+            moments=moments,
+        )
+        write_demo_context_json(ctx, output_dir / "context.json")
+        write_demo_context_markdown(
+            path=output_dir / "context.md",
+            video_filename=meta.filename,
+            duration_s=meta.duration,
+            screens=screens,
+            moments=moments,
+        )
+        write_demo_manifest(
+            screens,
+            output_dir / "manifest.parquet",
+            compression=config.exporter.parquet_compression,
+        )
 
-        shutil.rmtree(coarse_dir)
+        # process_video returns FrameResult lists for the non-demo path;
+        # the demo path now writes its own outputs and returns an empty
+        # list as a sentinel — callers should consume context.json /
+        # manifest.parquet instead.
+        return []
 
-    # --- Final pass: process frames, enrich metadata, write manifest ---
-    # Use a pipeline that writes keyframe images but NOT the manifest
-    # (we manage the manifest ourselves for correct enrichment ordering)
-    final_config = config.model_copy(deep=True)
-    final_pipeline = Pipeline(final_config)
+    # Adaptive masking is designed for screencasts (cursor/clock noise).
+    # In video mode it both adds significant overhead and tends to mask out
+    # the very UI changes we want to detect. Disable it for the pipeline.
+    pipeline_config = config.model_copy(deep=True)
+    pipeline_config.masking.enabled = False
+
+    # --- Single streaming pass: seek-based coarse decode + pipeline ---
+    pipeline = Pipeline(pipeline_config)
     results: list[FrameResult] = []
     keyframe_count = 0
     prev_keyframe_ts: float | None = None
 
-    for frame, ts, frame_num in all_frames:
+    # Decoder downscales inside pyav (libswscale), which is much faster than
+    # decoding at full resolution and resizing in Python.
+    for frame, ts, frame_num in decoder.iter_coarse_frames_seek(sample_fps, max_dim=max_dim):
         frame_id = f"frame_{frame_num:06d}"
-        result = final_pipeline.process_frame(
+        result = pipeline.process_frame(
             frame,
             frame_id=frame_id,
             source_format="video",
         )
+
+        is_forced = _should_force_keyframe(ts, forced_ts)
+        was_visual_keyframe = result.is_keyframe
+
+        # Promote forced (transcript-triggered) frames to keyframes
+        if is_forced and not result.is_keyframe:
+            asset_path = save_keyframe(
+                frame,
+                output_dir,
+                frame_id,
+                fmt=config.exporter.keyframe_format,
+            )
+            result.is_keyframe = True
+            result.event_type = EventType.KEYFRAME
+            result.asset_path = str(asset_path)
+            result.visual_reason = "Transcript trigger"
+            pipeline.update_reference_state(frame, frame_id, str(asset_path))
+
+        # Set trigger_type on every keyframe
+        if result.is_keyframe:
+            result.trigger_type = _merge_trigger_type(
+                is_visual=was_visual_keyframe,
+                is_transcript=is_forced,
+            )
 
         # Enrich with video metadata
         result.source_video = meta.filename
@@ -244,8 +430,7 @@ def process_video(
 
         if result.is_keyframe:
             keyframe_count += 1
-            new_frame_id = f"step_{keyframe_count:03d}"
-            # Rename the saved keyframe image to use the step_NNN name
+            new_frame_id = timestamp_filename(ts)
             if result.asset_path:
                 old_path = Path(result.asset_path)
                 new_path = old_path.with_name(new_frame_id + old_path.suffix)
@@ -293,6 +478,12 @@ def process_video(
             r.audio_activity = get_audio_activity(ts, speech_segments)
         elif config.video.audio_detection:
             r.audio_activity = "silence"
+
+    # --- Context export (JSON + Markdown) ---
+    transcript_for_context = transcript_segments or []
+    ctx = build_context(meta.filename, meta.duration, results, transcript_for_context)
+    write_context_json(ctx, output_dir / "context.json")
+    write_context_markdown(ctx, output_dir / "context.md")
 
     # Write fully-enriched results to the manifest
     for r in results:

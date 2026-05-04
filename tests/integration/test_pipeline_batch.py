@@ -14,7 +14,6 @@ from peeklet.pipeline import Pipeline
 def basic_config(tmp_output: Path) -> PeekletConfig:
     return PeekletConfig.model_validate(
         {
-            "redactor": {"enabled": False},
             "exporter": {"output_dir": str(tmp_output)},
             "masking": {"block_size": 50, "window_size": 5, "noise_threshold": 0.8},
             "comparator": {"ssim_threshold": 0.85},
@@ -80,7 +79,7 @@ class TestPipelineBatch:
         pipeline.process_frame(frame_b, frame_id="frame_001")
         pipeline.finalize()
 
-        keyframes = list(tmp_output.glob("*.png"))
+        keyframes = list(tmp_output.glob("*.jpg")) + list(tmp_output.glob("*.png"))
         assert len(keyframes) == 2
 
     def test_cascade_skips_comparator_on_hash_match(

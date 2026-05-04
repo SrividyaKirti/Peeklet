@@ -6,18 +6,18 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from peeklet.config import PeekletConfig, load_patterns
 from peeklet.core.comparator import compare_frames
 from peeklet.core.exporter import ManifestWriter, save_keyframe
 from peeklet.core.hasher import compute_phash, compute_phash_tiled, hashes_match, tiled_hashes_match
 from peeklet.core.masking import AdaptiveMask
-from peeklet.core.redactor import build_pattern_set, detect_and_redact
 from peeklet.utils.types import EventType, FrameResult
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     import numpy as np
+
+    from peeklet.config import PeekletConfig
 
 
 class Pipeline:
@@ -56,18 +56,6 @@ class Pipeline:
         self._last_tiled_hashes: list[str] | None = None
         self._last_tile_means: list[tuple[float, float, float]] | None = None
 
-        # Build redaction pattern set (if redactor enabled)
-        custom_patterns: list = []
-        if config.redactor.enabled and config.redactor.custom_patterns_file:
-            try:
-                custom_patterns = load_patterns(Path(config.redactor.custom_patterns_file))
-            except FileNotFoundError:
-                custom_patterns = []
-        self._pattern_set = build_pattern_set(
-            pii_types=config.redactor.pii_types if config.redactor.enabled else [],
-            custom_patterns=custom_patterns,
-        )
-
     def _make_keyframe(
         self,
         frame: np.ndarray,
@@ -89,18 +77,8 @@ class Pipeline:
         """Save a keyframe and build the result, updating rolling state."""
         h, w = frame.shape[:2]
 
-        # PII redaction — run on confirmed keyframes only
-        pii_detected: bool | None = None
-        frame_to_save = frame
-        if self._config.redactor.enabled and self._pattern_set:
-            frame_to_save, pii_detected = detect_and_redact(
-                frame,
-                self._pattern_set,
-                changed_regions=changed_regions,
-            )
-
         asset_path = save_keyframe(
-            frame_to_save,
+            frame,
             self._output_dir,
             frame_id,
             fmt=self._config.exporter.keyframe_format,
@@ -122,7 +100,6 @@ class Pipeline:
             changed_pct=changed_pct,
             changed_regions=changed_regions,
             asset_path=str(asset_path),
-            pii_detected=pii_detected,
             visual_reason=visual_reason,
             prev_keyframe_id=self._last_keyframe_id,
             prev_keyframe_path=self._last_keyframe_path,
@@ -159,8 +136,11 @@ class Pipeline:
         """
         h, w = frame.shape[:2]
 
-        # Step 1: Apply adaptive mask
-        masked_frame, mask_regions = self._mask.apply(frame)
+        # Step 1: Apply adaptive mask (or skip if disabled)
+        if self._config.masking.enabled:
+            masked_frame, mask_regions = self._mask.apply(frame)
+        else:
+            masked_frame, mask_regions = frame, []
 
         # Step 2: Compute perceptual hash — tiled for tall images
         is_tall = h > w * self._config.hasher.tile_aspect_ratio
@@ -357,6 +337,78 @@ class Pipeline:
         )
         self._writer.append(result)
         return result
+
+    def update_reference_state(
+        self,
+        frame: np.ndarray,
+        frame_id: str,
+        asset_path: str,
+    ) -> None:
+        """Update rolling reference state to anchor on the given frame.
+
+        Recomputes masking and hashing for ``frame`` and updates all
+        ``_last_*`` fields so subsequent visual comparisons are made against
+        this frame. Does NOT save an image to disk or append to the manifest —
+        the caller is expected to have already persisted the keyframe via
+        ``save_keyframe()`` and will write the manifest row itself.
+
+        This is used when a frame is promoted to a keyframe for reasons
+        external to the visual pipeline (e.g. a forced transcript-triggered
+        keyframe in video processing).
+
+        Args:
+            frame: RGB uint8 numpy array that is now the reference keyframe.
+            frame_id: Unique identifier for this new reference frame.
+            asset_path: On-disk path to the already-saved keyframe image.
+        """
+        h, w = frame.shape[:2]
+
+        # Step 1: Apply adaptive mask (mirrors process_frame)
+        if self._config.masking.enabled:
+            masked_frame, _ = self._mask.apply(frame)
+        else:
+            masked_frame = frame
+
+        # Step 2: Compute perceptual hash — tiled for tall images
+        is_tall = h > w * self._config.hasher.tile_aspect_ratio
+        current_tile_means: list[tuple[float, float, float]] | None = None
+        if is_tall:
+            tile_height = w  # roughly square tiles
+            current_hashes = compute_phash_tiled(
+                masked_frame,
+                hash_size=self._config.hasher.hash_size,
+                tile_height=tile_height,
+            )
+            current_hash = current_hashes[0]
+            n_tiles = max(1, math.ceil(h / tile_height))
+            current_tile_means = []
+            for i in range(n_tiles):
+                tile = masked_frame[i * tile_height : min((i + 1) * tile_height, h)]
+                current_tile_means.append(
+                    (
+                        float(tile[:, :, 0].mean()),
+                        float(tile[:, :, 1].mean()),
+                        float(tile[:, :, 2].mean()),
+                    )
+                )
+        else:
+            current_hashes = None
+            current_hash = compute_phash(masked_frame, hash_size=self._config.hasher.hash_size)
+
+        current_mean: tuple[float, float, float] = (
+            float(masked_frame[:, :, 0].mean()),
+            float(masked_frame[:, :, 1].mean()),
+            float(masked_frame[:, :, 2].mean()),
+        )
+
+        # Update rolling state (mirrors _make_keyframe tail)
+        self._last_hash = current_hash
+        self._last_keyframe = masked_frame
+        self._last_mean = current_mean
+        self._last_keyframe_id = frame_id
+        self._last_keyframe_path = asset_path
+        self._last_tiled_hashes = current_hashes
+        self._last_tile_means = current_tile_means
 
     def finalize(self) -> None:
         """Flush the manifest writer to disk."""
