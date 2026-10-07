@@ -336,7 +336,7 @@ def compute_part_b(frame: np.ndarray) -> int:
     hash invariant to overall brightness shifts.
     """
     from PIL import Image
-    from scipy.fft import dct  # type: ignore[import-untyped]
+    from scipy.fft import dct
 
     strip = _crop_header_strip(frame)
     if strip.size == 0:
