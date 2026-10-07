@@ -1,49 +1,64 @@
 """Tests for speech/silence detection."""
 
+import wave
 from pathlib import Path
 
+import imageio.v3 as iio
+import numpy as np
 import pytest
 
-try:
-    import pydub  # noqa: F401
+from peeklet.speech import detect_speech_segments
 
-    _has_pydub = True
-except ImportError:
-    _has_pydub = False
+SR = 16000
 
 
-@pytest.mark.skipif(not _has_pydub, reason="requires peeklet[video]")
-class TestSpeechSilenceDetection:
-    def test_detect_speech_in_audio(self, tmp_path: Path) -> None:
-        from pydub import AudioSegment
-        from pydub.generators import Sine
+def _write_wav(path: Path, samples: np.ndarray) -> None:
+    pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(pcm.tobytes())
 
-        # Generate 3 seconds: 1s silence, 1s tone (speech proxy), 1s silence
-        silence = AudioSegment.silent(duration=1000)
-        tone = Sine(440).to_audio_segment(duration=1000).apply_gain(-10)
-        audio = silence + tone + silence
-        audio_path = tmp_path / "test.wav"
-        audio.export(str(audio_path), format="wav")
 
-        from peeklet.speech import detect_speech_segments
+def test_detect_speech_in_audio(tmp_path: Path) -> None:
+    t = np.arange(2 * SR) / SR
+    tone = 0.5 * np.sin(2 * np.pi * 440 * t)
+    sil = np.zeros(SR)
+    path = tmp_path / "tone.wav"
+    _write_wav(path, np.concatenate([sil, tone, sil]))
 
-        speech_segments = detect_speech_segments(audio_path)
-        # Should detect speech roughly in the 1-2 second range
-        assert len(speech_segments) >= 1
-        has_speech_in_middle = any(s < 2.0 and e > 1.0 for s, e in speech_segments)
-        assert has_speech_in_middle
+    [(start, end)] = detect_speech_segments(path)
+    assert start == pytest.approx(1.0, abs=0.5)
+    assert end == pytest.approx(3.0, abs=0.5)
 
-    def test_silence_only_audio(self, tmp_path: Path) -> None:
-        from pydub import AudioSegment
 
-        silence = AudioSegment.silent(duration=2000)
-        audio_path = tmp_path / "test.wav"
-        silence.export(str(audio_path), format="wav")
+def test_trailing_speech_closes_at_duration(tmp_path: Path) -> None:
+    t = np.arange(SR) / SR
+    path = tmp_path / "t.wav"
+    _write_wav(path, np.concatenate([np.zeros(SR), 0.5 * np.sin(2 * np.pi * 440 * t)]))
+    [(start, end)] = detect_speech_segments(path)
+    assert start == pytest.approx(1.0, abs=0.5)
+    assert end == pytest.approx(2.0, abs=0.01)
 
-        from peeklet.speech import detect_speech_segments
 
-        speech_segments = detect_speech_segments(audio_path)
-        assert speech_segments == []
+def test_silence_only_audio(tmp_path: Path) -> None:
+    path = tmp_path / "silence.wav"
+    _write_wav(path, np.zeros(2 * SR))
+    assert detect_speech_segments(path) == []
+
+
+def test_video_without_audio_raises(tmp_path: Path) -> None:
+    path = tmp_path / "silent.mp4"
+    frames = np.zeros((5, 64, 64, 3), dtype=np.uint8)
+    iio.imwrite(path, frames, plugin="pyav", fps=5, codec="libx264")
+    with pytest.raises(RuntimeError, match="could not decode audio"):
+        detect_speech_segments(path)
+
+
+def test_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="could not decode audio"):
+        detect_speech_segments(tmp_path / "nope.mp4")
 
 
 def test_first_range_is_an_onset() -> None:

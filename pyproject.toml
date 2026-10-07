@@ -32,11 +32,9 @@ dependencies = [
     "pyyaml>=6.0",
     "imageio[ffmpeg]>=2.31",
     "av>=14.0",
-    "pydub>=0.25",
     "pytesseract>=0.3.10",
     "anthropic>=0.40",
     "openai>=1.0",
-    "audioop-lts; python_version >= \"3.13\"",
 ]
 
 [project.optional-dependencies]
@@ -87,7 +85,6 @@ module = [
     "av.*",
     "imageio.*",
     "imageio_ffmpeg.*",
-    "pydub.*",
     "pytesseract.*",
     "openai.*",
     "anthropic.*",
