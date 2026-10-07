@@ -40,3 +40,7 @@ results/
 # Environment
 .env
 .env.local
+
+# Evaluation data
+eval/data/
+eval/results/

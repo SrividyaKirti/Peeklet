@@ -1,4 +1,4 @@
-"""Configuration loading and validation for Peeklet."""
+"""Configuration for Peeklet's single annotation path."""
 
 from __future__ import annotations
 
@@ -7,133 +7,80 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
-class PipelineConfig(BaseModel):
-    """Pipeline execution settings."""
+class ScoreWeights(BaseModel):
+    """Weights for the heuristic screen score (each signal is scaled to [0, 1])."""
 
-    mode: Literal["batch", "stream"] = "batch"
-    concurrency: int = Field(default=4, ge=1)
+    model_config = {"extra": "forbid"}
 
-    @field_validator("mode")
-    @classmethod
-    def validate_mode(cls, v: str) -> str:
-        if v not in ("batch", "stream"):
-            raise ValueError(f"mode must be 'batch' or 'stream', got '{v}'")
-        return v
-
-
-class MaskingConfig(BaseModel):
-    """Adaptive masking settings."""
-
-    block_size: int = Field(default=32, gt=0)
-    window_size: int = Field(default=15, gt=0)
-    noise_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
-
-
-class HasherConfig(BaseModel):
-    """Perceptual hashing settings."""
-
-    algorithm: Literal["phash"] = "phash"
-    hash_size: int = Field(default=8, gt=0)
-    tile_aspect_ratio: float = Field(default=1.5, gt=0.0)
-
-
-class ComparatorConfig(BaseModel):
-    """SSIM comparison settings."""
-
-    ssim_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
-    min_changed_pct: float = Field(default=2.0, ge=0.0)
-    min_changed_blocks: int = Field(default=3, ge=0)
-
-
-class RedactorConfig(BaseModel):
-    """PII redaction settings."""
-
-    enabled: bool = True
-    pii_types: list[str] = Field(
-        default_factory=lambda: [
-            "email",
-            "phone",
-            "ssn",
-            "credit_card",
-            "ip_address",
-            "address",
-        ]
-    )
-    custom_patterns_file: str | None = None
-
-
-class ExporterConfig(BaseModel):
-    """Export settings."""
-
-    output_dir: str = "./output"
-    keyframe_format: Literal["png", "jpg"] = "png"
-    parquet_compression: Literal["snappy", "gzip", "zstd", "none"] = "snappy"
-
-
-class InputConfig(BaseModel):
-    """Input settings."""
-
-    supported_formats: list[str] = Field(
-        default_factory=lambda: ["png", "jpg", "jpeg", "bmp", "tiff", "webp", "pdf"]
-    )
-    sort_by: Literal["filename", "timestamp"] = "filename"
-
-
-class VideoConfig(BaseModel):
-    """Video input settings."""
-
-    sample_fps: float = Field(default=1.0, gt=0.0)
-    formats: list[str] = Field(default_factory=lambda: ["mp4", "mov", "webm"])
-    audio_detection: bool = True
-    transcript_path: str | None = None
+    references: float = Field(default=0.25, ge=0.0)
+    text_overlap: float = Field(default=0.20, ge=0.0)
+    onsets: float = Field(default=0.20, ge=0.0)
+    verbal_cues: float = Field(default=0.15, ge=0.0)
+    visual_change: float = Field(default=0.10, ge=0.0)
+    time_on_screen: float = Field(default=0.10, ge=0.0)
 
 
 class PeekletConfig(BaseModel):
-    """Root configuration for Peeklet."""
+    """All tunables for annotate(). Unknown keys are rejected."""
 
-    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
-    masking: MaskingConfig = Field(default_factory=MaskingConfig)
-    hasher: HasherConfig = Field(default_factory=HasherConfig)
-    comparator: ComparatorConfig = Field(default_factory=ComparatorConfig)
-    redactor: RedactorConfig = Field(default_factory=RedactorConfig)
-    exporter: ExporterConfig = Field(default_factory=ExporterConfig)
-    input: InputConfig = Field(default_factory=InputConfig)
-    video: VideoConfig = Field(default_factory=VideoConfig)
+    model_config = {"extra": "forbid"}
 
+    # Sampling and change detection
+    sample_fps: float = Field(default=1.0, gt=0.0)
+    change_max_dim: int = Field(default=720, ge=64)
+    mask_block_size: int = Field(default=32, gt=0)
+    mask_window_size: int = Field(default=15, gt=0)
+    mask_noise_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+    ssim_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    min_changed_blocks: int = Field(default=3, ge=0)
 
-class PiiPattern(BaseModel):
-    """A PII detection pattern."""
+    # Checkpoints
+    checkpoint_window_seconds: float = Field(default=5.0, ge=0.0)
+    min_pause_seconds: float = Field(default=1.5, ge=0.0)
+    silence_threshold_dbfs: float = -40.0
+    cue_threshold: float = Field(default=1.0, gt=0.0)
+    anchor_bonus: float = Field(default=1.0, ge=0.0)
 
-    name: str
-    regex: str = ""
-    description: str = ""
-    enabled: bool = True
+    # Screens (OCR, low-info rejector, fingerprint)
+    ocr_max_dim: int = Field(default=1920, gt=0)
+    min_text_lines: int = Field(default=10, ge=0)
+    min_grid_cells: int = Field(default=12, ge=0)
+    min_edge_ratio: float = Field(default=0.020, ge=0.0, le=1.0)
+    phash_threshold: int = Field(default=6, ge=0, le=64)
+    ocr_field_min_chars: int = Field(default=2, ge=0)
+
+    # Transcript and alignment
+    max_line_seconds: float = Field(default=8.0, gt=0.0)
+    lead_seconds: float = Field(default=1.5, ge=0.0)
+
+    # Scoring
+    score_weights: ScoreWeights = Field(default_factory=ScoreWeights)
+
+    # LLM judge + describe
+    use_llm: bool = True
+    llm_provider: Literal["anthropic", "openai", "openrouter"] = "anthropic"
+    llm_model: str = "claude-haiku-4-5"
+    shortlist_factor: float = Field(default=2.0, ge=1.0)
+    llm_concurrency: int = Field(default=8, ge=1)
+    llm_max_lines: int = Field(default=8, ge=1)
+    llm_cache_dir: str = "~/.cache/peeklet/judgments"
+
+    # Output
+    max_images: int = Field(default=20, ge=0)
+    max_image_edge: int = Field(default=1568, ge=64)
+    jpeg_quality: int = Field(default=90, ge=1, le=100)
 
 
 def load_config(path: Path | None) -> PeekletConfig:
-    """Load config from a JSON or YAML file, or return defaults if path is None."""
+    """Load config from YAML/JSON, or return defaults when path is None."""
     if path is None:
         return PeekletConfig()
-
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
-
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(text) if path.suffix in (".yaml", ".yml") else json.loads(text)
-
     return PeekletConfig.model_validate(data or {})
-
-
-def load_patterns(path: Path) -> list[PiiPattern]:
-    """Load custom PII patterns from a YAML file."""
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Patterns file not found: {path}")
-
-    data = yaml.safe_load(path.read_text())
-    raw_patterns = data.get("patterns", [])
-    return [PiiPattern.model_validate(p) for p in raw_patterns]

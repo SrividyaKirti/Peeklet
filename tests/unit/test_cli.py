@@ -1,216 +1,63 @@
-"""Tests for the CLI interface."""
+"""CLI smoke tests (annotate is mocked)."""
 
-from pathlib import Path
+from __future__ import annotations
 
-import numpy as np
-import pyarrow.parquet as pq
-import pytest
+from typing import TYPE_CHECKING
+from unittest import mock
+
 from click.testing import CliRunner
-from PIL import Image
 
 from peeklet.cli import main
+from peeklet.render import Entries, RunStats
+from peeklet.transcript import TranscriptError
 
-try:
-    import av  # noqa: F401
-
-    _has_video_deps = True
-except ImportError:
-    _has_video_deps = False
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-def _create_test_images(directory: Path, count: int = 5) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    for i in range(count):
-        frame = np.full((100, 100, 3), i * 50, dtype=np.uint8)
-        Image.fromarray(frame).save(directory / f"frame_{i:03d}.png")
+def _files(tmp: Path) -> tuple[Path, Path]:
+    v, t = tmp / "v.mp4", tmp / "t.vtt"
+    v.write_bytes(b"x")
+    t.write_text("WEBVTT\n")
+    return v, t
 
 
-class TestCli:
-    def test_help(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
-        assert result.exit_code == 0
-        assert "Smart screenshot change detection" in result.output
-
-    def test_batch_mode(self, tmp_path: Path) -> None:
-        input_dir = tmp_path / "input"
-        output_dir = tmp_path / "output"
-        _create_test_images(input_dir, count=5)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            ["--input", str(input_dir), "--output", str(output_dir), "--no-redact"],
-        )
-        assert result.exit_code == 0
-
-        manifest = output_dir / "manifest.parquet"
-        assert manifest.exists()
-        table = pq.read_table(manifest)
-        assert table.num_rows == 5
-
-    def test_batch_with_config(self, tmp_path: Path) -> None:
-        input_dir = tmp_path / "input"
-        output_dir = tmp_path / "output"
-        _create_test_images(input_dir, count=3)
-
-        config_file = tmp_path / "config.json"
-        config_file.write_text(
-            '{"comparator": {"ssim_threshold": 0.5}, "redactor": {"enabled": false}}'
-        )
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            ["--input", str(input_dir), "--output", str(output_dir), "--config", str(config_file)],
-        )
-        assert result.exit_code == 0
-
-    def test_missing_input_dir_errors(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(main, ["--input", "/nonexistent/dir"])
-        assert result.exit_code != 0
-
-    def test_version(self) -> None:
-        runner = CliRunner()
-        result = runner.invoke(main, ["--version"])
-        assert result.exit_code == 0
-        assert "0.1.0" in result.output
-
-
-@pytest.mark.skipif(not _has_video_deps, reason="requires peeklet[video]")
-class TestVideoCliDetection:
-    def test_video_file_input(self, tmp_path: Path) -> None:
-        """CLI accepts a video file as --input."""
-        import imageio.v3 as iio
-
-        video_path = tmp_path / "demo.mp4"
-        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
-        with iio.imopen(video_path, "w", plugin="pyav") as out:
-            out.init_video_stream("libx264", fps=10)
-            for f in frames:
-                out.write_frame(f)
-
-        runner = CliRunner()
-        result = runner.invoke(
+def test_cli_passes_options_and_prints_summary(tmp_path: Path) -> None:
+    v, t = _files(tmp_path)
+    fake = Entries([], tmp_path / "out", RunStats(12, 5, 4, 3, ["w"]))
+    with mock.patch("peeklet.cli.annotate", return_value=fake) as ann:
+        res = CliRunner().invoke(
             main,
             [
-                "--input",
-                str(video_path),
-                "--output",
-                str(tmp_path / "output"),
-                "--no-redact",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "keyframe" in result.output.lower()
-
-    def test_directory_with_only_videos(self, tmp_path: Path) -> None:
-        """CLI processes directory of video files."""
-        import imageio.v3 as iio
-
-        for name in ["a.mp4", "b.mp4"]:
-            video_path = tmp_path / name
-            frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
-            with iio.imopen(video_path, "w", plugin="pyav") as out:
-                out.init_video_stream("libx264", fps=10)
-                for f in frames:
-                    out.write_frame(f)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "--input",
-                str(tmp_path),
-                "--output",
-                str(tmp_path / "output"),
-                "--no-redact",
-            ],
-        )
-        assert result.exit_code == 0
-
-    def test_mixed_directory_without_mode_errors(self, tmp_path: Path) -> None:
-        """CLI errors on mixed directory without --mode."""
-        import imageio.v3 as iio
-
-        video_path = tmp_path / "demo.mp4"
-        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
-        with iio.imopen(video_path, "w", plugin="pyav") as out:
-            out.init_video_stream("libx264", fps=10)
-            for f in frames:
-                out.write_frame(f)
-
-        img = Image.new("RGB", (80, 60))
-        img.save(tmp_path / "shot.png")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "--input",
-                str(tmp_path),
-                "--output",
-                str(tmp_path / "output"),
-            ],
-        )
-        assert result.exit_code != 0
-        assert "--mode" in result.output
-
-    def test_mixed_directory_with_mode_video(self, tmp_path: Path) -> None:
-        """CLI processes only videos when --mode video is specified."""
-        import imageio.v3 as iio
-
-        video_path = tmp_path / "demo.mp4"
-        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
-        with iio.imopen(video_path, "w", plugin="pyav") as out:
-            out.init_video_stream("libx264", fps=10)
-            for f in frames:
-                out.write_frame(f)
-
-        img = Image.new("RGB", (80, 60))
-        img.save(tmp_path / "shot.png")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "--input",
-                str(tmp_path),
-                "--output",
-                str(tmp_path / "output"),
-                "--mode",
-                "video",
-                "--no-redact",
-            ],
-        )
-        assert result.exit_code == 0
-
-    def test_transcript_flag(self, tmp_path: Path) -> None:
-        """CLI accepts --transcript flag."""
-        import imageio.v3 as iio
-
-        video_path = tmp_path / "demo.mp4"
-        frames = [np.zeros((60, 80, 3), dtype=np.uint8)] * 10
-        with iio.imopen(video_path, "w", plugin="pyav") as out:
-            out.init_video_stream("libx264", fps=10)
-            for f in frames:
-                out.write_frame(f)
-
-        srt_path = tmp_path / "transcript.srt"
-        srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n\n")
-
-        runner = CliRunner()
-        result = runner.invoke(
-            main,
-            [
-                "--input",
-                str(video_path),
-                "--output",
-                str(tmp_path / "output"),
-                "--no-redact",
+                str(v),
                 "--transcript",
-                str(srt_path),
+                str(t),
+                "--out",
+                str(tmp_path / "out"),
+                "--max-images",
+                "7",
+                "--no-llm",
+                "--llm-model",
+                "claude-sonnet-5-5",
+                "--debug",
             ],
         )
-        assert result.exit_code == 0
+    assert res.exit_code == 0, res.output
+    kwargs = ann.call_args.kwargs
+    assert kwargs["max_images"] == 7 and kwargs["use_llm"] is False and kwargs["debug"] is True
+    assert kwargs["config"].llm_model == "claude-sonnet-5-5"
+    assert "12 lines, 5 screens found, 4 shortlisted, 3 kept, 1 warning" in res.output
+
+
+def test_cli_reports_transcript_error(tmp_path: Path) -> None:
+    v, t = _files(tmp_path)
+    with mock.patch("peeklet.cli.annotate", side_effect=TranscriptError("bad transcript")):
+        res = CliRunner().invoke(main, [str(v), "--transcript", str(t), "--out", str(tmp_path)])
+    assert res.exit_code != 0
+    assert "bad transcript" in res.output
+
+
+def test_cli_requires_transcript(tmp_path: Path) -> None:
+    v, _ = _files(tmp_path)
+    res = CliRunner().invoke(main, [str(v), "--out", str(tmp_path)])
+    assert res.exit_code != 0

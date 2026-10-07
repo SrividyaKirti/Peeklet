@@ -1,184 +1,90 @@
-"""CLI entry point for Peeklet."""
+"""peeklet: annotate a screen-recording transcript with screenshots."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import click
 
-import peeklet
+from peeklet.annotate import annotate
 from peeklet.config import load_config
-from peeklet.core.loader import load_frame
-from peeklet.pipeline import Pipeline
-
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
-
-
-def _detect_mode(input_path: Path, mode: str | None, image_extensions: set[str]) -> str:
-    """Detect whether input is video or image mode."""
-    if input_path.is_file():
-        if input_path.suffix.lower() in VIDEO_EXTENSIONS:
-            return "video"
-        return "image"
-
-    # Directory — scan contents
-    has_videos = any(
-        f.suffix.lower() in VIDEO_EXTENSIONS for f in input_path.iterdir() if f.is_file()
-    )
-    has_images = any(
-        f.suffix.lower() in image_extensions for f in input_path.iterdir() if f.is_file()
-    )
-
-    if mode:
-        return mode
-
-    if has_videos and has_images:
-        raise click.UsageError(
-            "Directory contains both image and video files. "
-            "Select a mode: --mode video or --mode image"
-        )
-
-    if has_videos:
-        return "video"
-    return "image"
+from peeklet.screen import MissingDependencyError
+from peeklet.transcript import TranscriptError
 
 
 @click.command()
+@click.version_option(package_name="peeklet")
+@click.argument("video", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
-    "--input",
-    "input_path",
-    type=click.Path(exists=True, path_type=Path),
+    "--transcript",
     required=True,
-    help="Video file, or directory containing images or videos.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="SRT, VTT or Fathom markdown transcript.",
 )
 @click.option(
-    "--output",
-    "output_dir",
-    type=click.Path(path_type=Path),
-    default="./output",
-    help="Directory for keyframes and manifest.",
+    "--out",
+    "out_dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Output directory for transcript.json and frame images.",
 )
+@click.option(
+    "--max-images",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Maximum screenshots (default 20).",
+)
+@click.option("--no-llm", is_flag=True, help="Heuristic selection only; no descriptions.")
+@click.option(
+    "--llm-provider",
+    type=click.Choice(["anthropic", "openai", "openrouter"]),
+    default=None,
+    help="LLM provider for screen judging and descriptions (default anthropic).",
+)
+@click.option("--llm-model", default=None, help="Model id (default claude-haiku-4-5).")
 @click.option(
     "--config",
     "config_path",
-    type=click.Path(exists=True, path_type=Path),
     default=None,
-    help="Path to config file (JSON or YAML).",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to a Peeklet config file (YAML or JSON) overriding the defaults.",
 )
-@click.option("--no-redact", is_flag=True, default=False, help="Disable PII redaction.")
-@click.option("--no-audio", is_flag=True, default=False, help="Disable audio detection for video.")
-@click.option(
-    "--mode",
-    type=click.Choice(["video", "image"]),
-    default=None,
-    help="Force video or image mode (required for mixed directories).",
-)
-@click.option(
-    "--transcript",
-    "transcript_path",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Path to SRT or VTT transcript file.",
-)
-@click.version_option(version=peeklet.__version__, prog_name="peeklet")
+@click.option("--debug", is_flag=True, help="Also write debug.json with scoring details.")
 def main(
-    input_path: Path,
-    output_dir: Path,
+    video: Path,
+    transcript: Path,
+    out_dir: Path,
+    max_images: int | None,
+    no_llm: bool,
+    llm_provider: str | None,
+    llm_model: str | None,
     config_path: Path | None,
-    no_redact: bool,
-    no_audio: bool,
-    mode: str | None,
-    transcript_path: Path | None,
+    debug: bool,
 ) -> None:
-    """Smart screenshot change detection.
-
-    Filters noise from screenshot sequences or video recordings,
-    redacts PII, and exports a structured Parquet manifest of keyframes.
-    """
-    config = load_config(config_path)
-    if no_redact:
-        config.redactor.enabled = False
-    if no_audio:
-        config.video.audio_detection = False
-    if transcript_path:
-        config.video.transcript_path = str(transcript_path)
-    config.exporter.output_dir = str(output_dir)
-
-    image_extensions = {f".{fmt}" for fmt in config.input.supported_formats}
-    detected_mode = _detect_mode(input_path, mode, image_extensions)
-
-    if detected_mode == "video":
-        _run_video_mode(input_path, config)
-    else:
-        _run_image_mode(input_path, config, image_extensions)
-
-
-def _run_video_mode(input_path: Path, config: peeklet.config.PeekletConfig) -> None:
-    """Process video file(s)."""
-    from peeklet.core.exporter import ManifestWriter
-    from peeklet.core.video import process_video
-
-    if input_path.is_file():
-        video_files = [input_path]
-    else:
-        video_files = sorted(
-            f for f in input_path.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+    """Annotate VIDEO's transcript with the screenshots it refers to."""
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    cfg = load_config(config_path)
+    if llm_provider:
+        cfg.llm_provider = llm_provider  # type: ignore[assignment]
+    if llm_model:
+        cfg.llm_model = llm_model
+    try:
+        entries = annotate(
+            video,
+            transcript,
+            out_dir,
+            max_images=max_images,
+            config=cfg,
+            use_llm=not no_llm,
+            debug=debug,
         )
-
-    if not video_files:
-        click.echo(f"No video files found in {input_path}")
-        return
-
-    click.echo(f"Processing {len(video_files)} video(s)")
-
-    output_dir = Path(config.exporter.output_dir)
-    writer = ManifestWriter(
-        path=output_dir / "manifest.parquet",
-        compression=config.exporter.parquet_compression,
-    )
-
-    total_keyframes = 0
-    for vf in video_files:
-        click.echo(f"  Processing: {vf.name}")
-        results = process_video(vf, config, writer=writer)
-        kf_count = sum(1 for r in results if r.is_keyframe)
-        total_keyframes += kf_count
-        click.echo(f"    {kf_count} keyframes extracted")
-
-    writer.flush()
-
-    output_dir = Path(config.exporter.output_dir)
+    except (TranscriptError, MissingDependencyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    s = entries.stats
+    n_warn = len(s.warnings)
     click.echo(
-        f"Done: {total_keyframes} total keyframes. Manifest: {output_dir / 'manifest.parquet'}"
-    )
-
-
-def _run_image_mode(
-    input_dir: Path,
-    config: peeklet.config.PeekletConfig,
-    extensions: set[str],
-) -> None:
-    """Process image directory (existing behavior)."""
-    pipeline = Pipeline(config)
-    files = sorted(f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in extensions)
-
-    if not files:
-        click.echo(f"No supported images found in {input_dir}")
-        return
-
-    click.echo(f"Processing {len(files)} frames from {input_dir}")
-
-    keyframe_count = 0
-    for f in files:
-        frame = load_frame(f)
-        result = pipeline.process_frame(frame, frame_id=f.stem, source_format=f.suffix.lstrip("."))
-        if result.is_keyframe:
-            keyframe_count += 1
-
-    pipeline.finalize()
-    output_dir = Path(config.exporter.output_dir)
-    click.echo(
-        f"Done: {keyframe_count} keyframes from {len(files)} frames "
-        f"({100 * keyframe_count / len(files):.1f}%). "
-        f"Manifest: {output_dir / 'manifest.parquet'}"
+        f"{s.lines} lines, {s.screens_found} screens found, {s.shortlisted} shortlisted, "
+        f"{s.kept} kept, {n_warn} warning{'' if n_warn == 1 else 's'} "
+        f"-> {out_dir / 'transcript.json'}"
     )
