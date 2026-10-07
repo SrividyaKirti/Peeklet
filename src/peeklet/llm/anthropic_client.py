@@ -1,74 +1,61 @@
-"""Native Anthropic SDK adapter for the LLM Protocol."""
+"""Anthropic Messages API adapter for the LLM judge."""
 
 from __future__ import annotations
 
+import base64
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from peeklet.llm.base import (
-    SYSTEM_PROMPT,
-    LLMResponseError,
-    _parse_moments_json,
-    format_transcript_for_llm,
-)
+from peeklet.llm.base import SYSTEM_PROMPT, LLMResponseError, build_user_text, parse_judgment
 
 if TYPE_CHECKING:
-    from peeklet.types import Line, Moment
+    from peeklet.types import ScreenJudgment
 
 logger = logging.getLogger(__name__)
 
-# Lazy-import via module attribute so tests can patch this.
 try:
     import anthropic
-except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
+except ImportError:  # pragma: no cover
     anthropic = None  # type: ignore[assignment, unused-ignore]
 
-_MAX_TOKENS = 4096
+_MAX_TOKENS = 1024
 
 
 class AnthropicClient:
-    """Calls the Anthropic Messages API once per video."""
+    provider = "anthropic"
 
     def __init__(self, model: str) -> None:
-        if anthropic is None:
-            raise RuntimeError(
-                "--demo-mode with provider 'anthropic' requires the [demo] extra. "
-                "Install with: pip install peeklet[demo]"
-            )
-        self._model = model
+        if anthropic is None:  # pragma: no cover
+            raise RuntimeError("The anthropic package is required for provider 'anthropic'.")
+        self.model = model
         self._client = anthropic.Anthropic()
 
-    def pick_moments(
-        self,
-        transcript: list[Line],
-        video_duration: float,
-        anchors: list[Moment],
-    ) -> list[Moment]:
-        from peeklet.llm.base import format_anchors_for_llm
-
-        anchor_list = format_anchors_for_llm(anchors)
-        system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
-        user_message = (
-            "## Transcript\n\n"
-            f"{format_transcript_for_llm(transcript)}\n\n"
-            "## Anchor List (already covered — do not pick at these)\n\n"
-            f"{anchor_list}"
-        )
-
+    def judge_screen(
+        self, image_jpeg: bytes, ocr_text: str, lines: list[str], action_items: list[str]
+    ) -> ScreenJudgment:
+        content: list[Any] = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.standard_b64encode(image_jpeg).decode("ascii"),
+                },
+            },
+            {"type": "text", "text": build_user_text(ocr_text, lines, action_items)},
+        ]
         for attempt in (1, 2):
             response = self._client.messages.create(
-                model=self._model,
+                model=self.model,
                 max_tokens=_MAX_TOKENS,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": content}],
             )
-            raw = "".join(block.text for block in response.content if hasattr(block, "text"))
+            raw = "".join(getattr(b, "text", "") for b in response.content)
             try:
-                return _parse_moments_json(raw, video_duration)
+                return parse_judgment(raw)
             except LLMResponseError:
                 if attempt == 2:
                     raise
                 logger.warning("Anthropic returned unparseable JSON, retrying once")
-
-        # Unreachable.
-        raise AssertionError("retry loop exited without returning")
+        raise AssertionError("unreachable")

@@ -24,17 +24,6 @@ class Region:
 
 
 @dataclass(frozen=True, slots=True)
-class Moment:
-    """A screenshot-worthy moment in a video transcript."""
-
-    timestamp: float  # seconds into the video
-    visual_context_goal: str  # what the screenshot needs to capture
-    textual_anchor: str  # the transcript line that triggers this need
-    downstream_utility: str  # why the MLLM needs this image
-    source: str = "llm"  # "llm" | "anchor"
-
-
-@dataclass(frozen=True, slots=True)
 class Line:
     """One timestamped transcript line."""
 

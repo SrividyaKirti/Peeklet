@@ -1,74 +1,40 @@
-"""Native OpenAI SDK adapter pointed at OpenRouter.
-
-OpenRouter is OpenAI-wire-compatible, so we reuse the openai SDK with a
-hardcoded base URL and OpenRouter's own API key. The retry+parse loop is
-shared with OpenAIClient via the helper in llm_openai.
-"""
+"""OpenRouter adapter (OpenAI-compatible API) for the LLM judge."""
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import TYPE_CHECKING
 
-from peeklet.llm.base import SYSTEM_PROMPT, format_transcript_for_llm
-from peeklet.llm.openai_client import _call_openai_chat_with_retry
+from peeklet.llm.openai_client import chat_judge
 
 if TYPE_CHECKING:
-    from peeklet.types import Line, Moment
-
-logger = logging.getLogger(__name__)
+    from peeklet.types import ScreenJudgment
 
 try:
     import openai
-except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
+except ImportError:  # pragma: no cover
     openai = None  # type: ignore[assignment, unused-ignore]
 
-
-_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-_DEFAULT_HEADERS = {
-    "HTTP-Referer": "https://github.com/SrividyaKirti/Peeklet",
-    "X-Title": "Peeklet",
-}
+_BASE_URL = "https://openrouter.ai/api/v1"
+_HEADERS = {"HTTP-Referer": "https://github.com/SrividyaKirti/Peeklet", "X-Title": "Peeklet"}
 
 
 class OpenRouterClient:
-    """Calls OpenRouter's OpenAI-compatible chat completions API once per video."""
+    provider = "openrouter"
 
     def __init__(self, model: str) -> None:
-        if openai is None:
-            raise RuntimeError(
-                "--demo-mode with provider 'openrouter' requires the [demo] extra. "
-                "Install with: pip install peeklet[demo]"
-            )
-        self._model = model
+        if openai is None:  # pragma: no cover
+            raise RuntimeError("The openai package is required for provider 'openrouter'.")
+        self.model = model
         self._client = openai.OpenAI(
-            base_url=_OPENROUTER_BASE_URL,
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            default_headers=_DEFAULT_HEADERS,
+            base_url=_BASE_URL,
+            api_key=os.environ.get("OPENROUTER_API_KEY"),
+            default_headers=_HEADERS,
         )
 
-    def pick_moments(
-        self,
-        transcript: list[Line],
-        video_duration: float,
-        anchors: list[Moment],
-    ) -> list[Moment]:
-        from peeklet.llm.base import format_anchors_for_llm
-
-        anchor_list = format_anchors_for_llm(anchors)
-        system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
-        user_message = (
-            "## Transcript\n\n"
-            f"{format_transcript_for_llm(transcript)}\n\n"
-            "## Anchor List (already covered — do not pick at these)\n\n"
-            f"{anchor_list}"
-        )
-        return _call_openai_chat_with_retry(
-            client=self._client,
-            model=self._model,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            video_duration=video_duration,
-            provider_label="OpenRouter",
+    def judge_screen(
+        self, image_jpeg: bytes, ocr_text: str, lines: list[str], action_items: list[str]
+    ) -> ScreenJudgment:
+        return chat_judge(
+            self._client, self.model, image_jpeg, ocr_text, lines, action_items, "OpenRouter"
         )

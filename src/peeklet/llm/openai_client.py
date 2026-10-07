@@ -1,105 +1,71 @@
-"""Native OpenAI SDK adapter for the LLM Protocol.
-
-Respects ``OPENAI_BASE_URL`` so users can route through any OpenAI-compatible
-gateway (Ollama, Groq, OpenRouter, vLLM, Together, Azure, etc.).
-"""
+"""OpenAI chat-completions adapter (honours OPENAI_BASE_URL) for the LLM judge."""
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from peeklet.llm.base import (
-    SYSTEM_PROMPT,
-    LLMResponseError,
-    _parse_moments_json,
-    format_transcript_for_llm,
-)
+from peeklet.llm.base import SYSTEM_PROMPT, LLMResponseError, build_user_text, parse_judgment
 
 if TYPE_CHECKING:
-    from peeklet.types import Line, Moment
+    from peeklet.types import ScreenJudgment
 
 logger = logging.getLogger(__name__)
 
 try:
     import openai
-except ImportError:  # pragma: no cover - exercised when [demo] extra not installed
+except ImportError:  # pragma: no cover
     openai = None  # type: ignore[assignment, unused-ignore]
 
 
-def _call_openai_chat_with_retry(
-    client: object,
+def chat_judge(
+    client: Any,
     model: str,
-    system_prompt: str,
-    user_message: str,
-    video_duration: float,
-    *,
-    provider_label: str,
-) -> list[Moment]:
-    """Call an OpenAI-compatible chat completions endpoint with one retry on bad JSON.
-
-    Shared by OpenAIClient and OpenRouterClient — both speak the same wire
-    protocol, so the only thing that differs is which SDK instance is passed
-    in and what label appears in the retry log line.
-    """
-    for attempt in (1, 2):
-        response = client.chat.completions.create(  # type: ignore[attr-defined]
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+    image_jpeg: bytes,
+    ocr_text: str,
+    lines: list[str],
+    action_items: list[str],
+    label: str,
+) -> ScreenJudgment:
+    """Shared by OpenAI and OpenRouter: one vision chat call with one JSON retry."""
+    data_url = "data:image/jpeg;base64," + base64.standard_b64encode(image_jpeg).decode("ascii")
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "text", "text": build_user_text(ocr_text, lines, action_items)},
             ],
-        )
+        },
+    ]
+    for attempt in (1, 2):
+        response = client.chat.completions.create(model=model, messages=messages)
         raw = response.choices[0].message.content or ""
         try:
-            return _parse_moments_json(raw, video_duration)
+            return parse_judgment(raw)
         except LLMResponseError:
             if attempt == 2:
                 raise
-            logger.warning("%s returned unparseable JSON, retrying once", provider_label)
-
-    raise AssertionError("retry loop exited without returning")
+            logger.warning("%s returned unparseable JSON, retrying once", label)
+    raise AssertionError("unreachable")
 
 
 class OpenAIClient:
-    """Calls the OpenAI chat completions API once per video."""
+    provider = "openai"
 
     def __init__(self, model: str) -> None:
-        if openai is None:
-            raise RuntimeError(
-                "--demo-mode with provider 'openai' requires the [demo] extra. "
-                "Install with: pip install peeklet[demo]"
-            )
-        self._model = model
-
+        if openai is None:  # pragma: no cover
+            raise RuntimeError("The openai package is required for provider 'openai'.")
+        self.model = model
         base_url = os.environ.get("OPENAI_BASE_URL")
-        if base_url:
-            self._client = openai.OpenAI(base_url=base_url)
-        else:
-            self._client = openai.OpenAI()
+        self._client = openai.OpenAI(base_url=base_url) if base_url else openai.OpenAI()
 
-    def pick_moments(
-        self,
-        transcript: list[Line],
-        video_duration: float,
-        anchors: list[Moment],
-    ) -> list[Moment]:
-        from peeklet.llm.base import format_anchors_for_llm
-
-        anchor_list = format_anchors_for_llm(anchors)
-        system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)
-        user_message = (
-            "## Transcript\n\n"
-            f"{format_transcript_for_llm(transcript)}\n\n"
-            "## Anchor List (already covered — do not pick at these)\n\n"
-            f"{anchor_list}"
-        )
-        return _call_openai_chat_with_retry(
-            client=self._client,
-            model=self._model,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            video_duration=video_duration,
-            provider_label="OpenAI",
+    def judge_screen(
+        self, image_jpeg: bytes, ocr_text: str, lines: list[str], action_items: list[str]
+    ) -> ScreenJudgment:
+        return chat_judge(
+            self._client, self.model, image_jpeg, ocr_text, lines, action_items, "OpenAI"
         )
