@@ -124,5 +124,11 @@ def test_entry_to_dict_without_image_omits_visual_context() -> None:
 
 
 def test_screen_judgment_is_frozen() -> None:
+    import dataclasses
+
+    import pytest
+
     j = ScreenJudgment(include=True, reason="r", visual_context="v")
     assert j.include
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        j.include = False  # type: ignore[misc]

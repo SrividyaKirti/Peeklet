@@ -126,6 +126,19 @@ def test_downscale_preserves_aspect() -> None:
     assert downscale_to_max_dim(f, 960).shape == (540, 960, 3)
 
 
+def test_downscale_preserves_aspect_portrait() -> None:
+    f = np.zeros((1920, 1080, 3), dtype=np.uint8)
+    assert downscale_to_max_dim(f, 960).shape == (960, 540, 3)
+
+
+def test_downscale_preserves_aspect_nonuniform() -> None:
+    f = np.zeros((1000, 333, 3), dtype=np.uint8)
+    result = downscale_to_max_dim(f, 500)
+    expected_h = int(round(1000 * 500 / 1000))
+    expected_w = int(round(333 * 500 / 1000))
+    assert result.shape == (expected_h, expected_w, 3)
+
+
 def test_jpeg_round_trip_and_max_edge() -> None:
     f = np.full((400, 800, 3), 128, dtype=np.uint8)
     data = encode_jpeg(f, quality=90, max_edge=200)
