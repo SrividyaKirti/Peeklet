@@ -4,11 +4,13 @@ import numpy as np
 
 from peeklet.change import (
     AdaptiveMask,
+    ChangeDetector,
     ComparisonResult,
     compare_frames,
     compute_phash,
     hashes_match,
 )
+from peeklet.config import PeekletConfig
 
 
 class TestAdaptiveMask:
@@ -171,3 +173,41 @@ class TestComparisonResult:
             changed_regions=[],
         )
         assert result.ssim_score == 0.85
+
+
+def _solid(rgb: tuple[int, int, int], size: int = 128) -> np.ndarray:
+    return np.full((size, size, 3), rgb, dtype=np.uint8)
+
+
+def test_first_frame_is_a_change() -> None:
+    res = ChangeDetector(PeekletConfig()).update(_solid((10, 20, 30)))
+    assert res.changed and res.change == 1.0
+
+
+def test_identical_frame_is_not_a_change() -> None:
+    det = ChangeDetector(PeekletConfig())
+    det.update(_solid((10, 20, 30)))
+    res = det.update(_solid((10, 20, 30)))
+    assert not res.changed and res.change == 0.0
+
+
+def test_large_change_detected() -> None:
+    det = ChangeDetector(PeekletConfig())
+    det.update(_solid((10, 10, 10)))
+    rng = np.random.default_rng(0)
+    res = det.update(rng.integers(0, 255, (128, 128, 3), dtype=np.uint8))
+    assert res.changed and 0.0 < res.change <= 1.0
+
+
+def test_key_stable_for_identical_frames_and_differs_by_colour() -> None:
+    det = ChangeDetector(PeekletConfig())
+    k1 = det.update(_solid((50, 50, 50))).key
+    k2 = det.update(_solid((50, 50, 50))).key
+    k3 = det.update(_solid((90, 50, 50))).key
+    assert k1 == k2 != k3
+
+
+def test_frames_are_downscaled_before_comparison() -> None:
+    det = ChangeDetector(PeekletConfig(change_max_dim=64))
+    res = det.update(_solid((1, 2, 3), size=1000))
+    assert res.changed

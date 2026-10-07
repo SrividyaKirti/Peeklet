@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
@@ -37,18 +38,18 @@ class WordBox(NamedTuple):
     h: int
 
 
-def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
+def ocr_word_boxes(frame: np.ndarray, max_dim: int) -> list[WordBox]:
     """Run Tesseract once and return accepted word boxes.
 
     A word is accepted if its confidence >= ``_MIN_WORD_CONFIDENCE`` and its
-    stripped text length >= ``_MIN_WORD_LENGTH``. Coordinates are in the
-    downscaled frame's pixel space so all layout signals share one
-    coordinate system from a single OCR call.
+    stripped text length >= ``_MIN_WORD_LENGTH``. Coordinates are scaled back
+    to the original ``frame``'s pixel space.
     """
     if pytesseract is None:
         return []
 
-    downscaled = downscale_to_max_dim(frame, downscale_dim)
+    downscaled = downscale_to_max_dim(frame, max_dim)
+    scale = frame.shape[1] / downscaled.shape[1]
     try:
         data = pytesseract.image_to_data(downscaled, output_type=pytesseract.Output.DICT)
     except Exception as exc:
@@ -78,16 +79,16 @@ def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
             WordBox(
                 text=text,
                 conf=conf_val,
-                x=int(x),
-                y=int(y),
-                w=int(w),
-                h=int(h),
+                x=int(round(int(x) * scale)),
+                y=int(round(int(y) * scale)),
+                w=int(round(int(w) * scale)),
+                h=int(round(int(h) * scale)),
             )
         )
     return boxes
 
 
-def _count_text_lines(boxes: list[WordBox]) -> int:
+def count_text_lines(boxes: list[WordBox]) -> int:
     """Cluster word boxes by y-center into distinct text lines.
 
     Uses a tolerance of half the median box height so a single typographic
@@ -110,7 +111,7 @@ def _count_text_lines(boxes: list[WordBox]) -> int:
 _GRID_DIM = 8
 
 
-def _count_occupied_grid_cells(boxes: list[WordBox], frame_shape: tuple[int, ...]) -> int:
+def count_occupied_grid_cells(boxes: list[WordBox], frame_shape: tuple[int, ...]) -> int:
     """Count distinct cells in an 8x8 grid that contain a word-box center.
 
     Frame shape follows numpy convention (H, W, ...). Out-of-bounds centers
@@ -135,7 +136,7 @@ def _count_occupied_grid_cells(boxes: list[WordBox], frame_shape: tuple[int, ...
 _EDGE_MAGNITUDE_THRESHOLD = 30.0
 
 
-def _edge_pixel_ratio(frame: np.ndarray) -> float:
+def edge_pixel_ratio(frame: np.ndarray) -> float:
     """Fraction of pixels whose |∂x|+|∂y| gradient exceeds a fixed threshold.
 
     Uses ``np.gradient`` on the grayscale frame — numpy-only, no cv2
@@ -155,29 +156,26 @@ def _edge_pixel_ratio(frame: np.ndarray) -> float:
     return edge_pixels / total if total else 0.0
 
 
-def _is_low_info_frame(frame: np.ndarray, config: PeekletConfig) -> bool:
-    """Composite low-information rejector (triple-AND).
+def is_low_info_frame(frame: np.ndarray, boxes: list[WordBox], config: PeekletConfig) -> bool:
+    """Triple-AND rejector: low on text lines, occupied grid cells AND edge density."""
+    if edge_pixel_ratio(frame) >= config.min_edge_ratio:
+        return False
+    if count_text_lines(boxes) >= config.min_text_lines:
+        return False
+    return count_occupied_grid_cells(boxes, frame.shape) < config.min_grid_cells
 
-    Rejects a frame only if **all three** independent signals fall under
-    their thresholds. A legit minimalist UI will pass on at least one axis.
-    """
-    boxes = _ocr_word_boxes(frame, config.ocr_max_dim)
-    num_lines = _count_text_lines(boxes)
-    num_cells = _count_occupied_grid_cells(boxes, frame.shape)
-    edge_ratio = _edge_pixel_ratio(frame)
-    if edge_ratio >= config.min_edge_ratio:
-        return False
-    if num_lines >= config.min_text_lines:
-        return False
-    if num_cells >= config.min_grid_cells:
-        return False
-    logger.info(
-        "Low-info frame rejected: lines=%d cells=%d edge_ratio=%.4f",
-        num_lines,
-        num_cells,
-        edge_ratio,
-    )
-    return True
+
+class MissingDependencyError(RuntimeError):
+    """A required system dependency (tesseract) is not installed."""
+
+
+def require_tesseract() -> None:
+    """Fail fast with an install hint if pytesseract or the tesseract binary is missing."""
+    if pytesseract is None or shutil.which("tesseract") is None:
+        raise MissingDependencyError(
+            "Peeklet needs the tesseract OCR binary. Install it with "
+            "`brew install tesseract` (macOS) or `apt install tesseract-ocr` (Debian/Ubuntu)."
+        )
 
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]+")

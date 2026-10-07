@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import imagehash
 import numpy as np
 from PIL import Image
 from skimage.metrics import structural_similarity
 
-from peeklet.image_utils import compute_block_grid
+from peeklet.image_utils import compute_block_grid, downscale_to_max_dim
 from peeklet.types import Region
+
+if TYPE_CHECKING:
+    from peeklet.config import PeekletConfig
 
 
 class AdaptiveMask:
@@ -146,3 +150,61 @@ def _to_grayscale(frame: np.ndarray) -> np.ndarray:
     return (0.2989 * frame[:, :, 0] + 0.5870 * frame[:, :, 1] + 0.1140 * frame[:, :, 2]).astype(
         np.uint8
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeResult:
+    """Outcome of comparing one sample against the current reference frame."""
+
+    changed: bool
+    change: float  # 1 - SSIM vs reference; 1.0 for the first frame; 0.0 on hash match
+    key: str  # OCR cache key: masked pHash + rounded mean colour
+
+
+class ChangeDetector:
+    """Masking -> pHash -> SSIM cascade over a stream of samples.
+
+    The reference is the last sample that counted as a change, so slow drift
+    eventually registers. Frames are downscaled to cfg.change_max_dim first.
+    """
+
+    def __init__(self, cfg: PeekletConfig) -> None:
+        self._cfg = cfg
+        self._mask = AdaptiveMask(
+            block_size=cfg.mask_block_size,
+            window_size=cfg.mask_window_size,
+            noise_threshold=cfg.mask_noise_threshold,
+        )
+        self._ref: np.ndarray | None = None
+        self._ref_hash = ""
+        self._ref_mean = (0.0, 0.0, 0.0)
+
+    def update(self, frame: np.ndarray) -> ChangeResult:
+        small = downscale_to_max_dim(frame, self._cfg.change_max_dim)
+        masked, _ = self._mask.apply(small)
+        phash = compute_phash(masked)
+        mean = (
+            float(masked[:, :, 0].mean()),
+            float(masked[:, :, 1].mean()),
+            float(masked[:, :, 2].mean()),
+        )
+        key = f"{phash}:{round(mean[0])}:{round(mean[1])}:{round(mean[2])}"
+        if self._ref is None or self._ref.shape != masked.shape:
+            self._set_ref(masked, phash, mean)
+            return ChangeResult(changed=True, change=1.0, key=key)
+        mean_diff = max(abs(a - b) for a, b in zip(mean, self._ref_mean, strict=True))
+        if hashes_match(phash, self._ref_hash) and mean_diff < 5.0:
+            return ChangeResult(changed=False, change=0.0, key=key)
+        cmp = compare_frames(masked, self._ref, block_size=self._cfg.mask_block_size)
+        changed = (
+            cmp.ssim_score <= self._cfg.ssim_threshold
+            or len(cmp.changed_regions) > self._cfg.min_changed_blocks
+        )
+        if changed:
+            self._set_ref(masked, phash, mean)
+        return ChangeResult(changed=changed, change=min(1.0, max(0.0, cmp.change_score)), key=key)
+
+    def _set_ref(self, masked: np.ndarray, phash: str, mean: tuple[float, float, float]) -> None:
+        self._ref = masked
+        self._ref_hash = phash
+        self._ref_mean = mean
