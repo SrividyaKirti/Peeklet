@@ -156,6 +156,15 @@ video ──► 1 fps samples ──► change detection ──► candidates (+
 SRT, VTT, or Fathom markdown, parsed into lines of `(start, end, speaker, text)`.
 This reuses develop's parsers. Empty or unparseable input raises `TranscriptError`.
 
+**Splitting long lines.** Transcripts often chunk speech coarsely. WhisperX output in
+the GUIDE dataset has a median line length of 24.5s, and long Fathom monologues are
+similar. Because each line links to at most one screen, any line longer than
+`max_line_seconds` (default 8) is split at sentence boundaries (`.`, `?` or `!`
+followed by whitespace). Each piece keeps the speaker and gets a time slice
+proportional to its character count. Lines with no sentence boundary, or that are
+already short, are left unchanged. Consecutive pieces on the same screen merge back
+into one block at render time, so the output stays compact.
+
 ### 2. Checkpoints
 
 A checkpoint is a timestamp where Peeklet makes sure it has a good capture and
@@ -172,6 +181,12 @@ gives the screen on display a ranking boost. There are three kinds:
   there are no speech onsets.
 
 ### 3. Candidates
+
+The screen pass **streams** over the samples, because an hour of 1080p samples
+doesn't fit in memory. For each candidate only a small record (timestamp, screen id)
+is kept. Full frames are kept only as each screen's current best frame, stored as
+JPEG bytes. OCR results are cached by the sample's masked pHash, so a static screen
+is OCR'd once no matter how many samples or checkpoint windows cover it.
 
 - **Sampling.** Sample the whole video at 1 fps (`sample_fps`) with develop's
   seek-based decoder.
@@ -329,6 +344,7 @@ The README is rewritten around the single path.
 - checkpoints: `checkpoint_window_seconds`, `min_pause_seconds`,
   `silence_threshold_dbfs`, cue lexicon and weights, `anchor_bonus`
 - screens: rejector and fingerprint thresholds
+- transcript: `max_line_seconds`
 - alignment: `lead_seconds`
 - scoring: `score_weights`
 - LLM: `llm_provider`, `llm_model`, `shortlist_factor`, `llm_concurrency`,
@@ -362,6 +378,8 @@ needs no API keys or network.
 - **Unit tests**, one file per module. OCR is stubbed with fixed word boxes.
   Existing tests for moved code move with it, including develop's tests for
   speech detection, Fathom action items, and the trigger lexicon (from history).
+- **Transcript:** splitting long lines (at sentence boundaries, proportional
+  timing, speaker kept, short lines untouched).
 - **Checkpoints:** onsets require the minimum pause; verbal cues use the 1.0
   threshold; window selection by word count with the tie-break; an all-low-info
   window.
