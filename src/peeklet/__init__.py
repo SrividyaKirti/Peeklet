@@ -1,3 +1,7 @@
-"""Peeklet — Smart screenshot change detection."""
+"""Peeklet — annotate a screen-recording transcript with the screenshots it refers to."""
 
-__version__ = "0.1.0"
+from peeklet.annotate import annotate
+from peeklet.render import Entries
+
+__all__ = ["Entries", "annotate"]
+__version__ = "0.2.0"
