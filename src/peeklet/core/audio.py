@@ -195,17 +195,6 @@ def _parse_vtt(text: str) -> list[TranscriptSegment]:
     return _parse_srt(body)
 
 
-def align_transcript(timestamp: float, segments: list[TranscriptSegment]) -> str | None:
-    """Find transcript segment(s) overlapping the given timestamp.
-
-    Returns joined text if multiple segments overlap, or None if no match.
-    """
-    matches = [s for s in segments if s.start <= timestamp <= s.end]
-    if not matches:
-        return None
-    return " | ".join(s.text for s in matches)
-
-
 def _check_audio_deps() -> None:
     """Raise a clear error if audio dependencies are not installed."""
     try:
@@ -271,11 +260,3 @@ def detect_speech_segments(
         speech_ranges.append((current_start, duration_s))
 
     return [TranscriptSegment(start=s, end=e, text="[speech]") for s, e in speech_ranges]
-
-
-def get_audio_activity(timestamp: float, speech_segments: list[TranscriptSegment]) -> str:
-    """Return 'speech' or 'silence' for a given timestamp."""
-    for seg in speech_segments:
-        if seg.start <= timestamp <= seg.end:
-            return "speech"
-    return "silence"

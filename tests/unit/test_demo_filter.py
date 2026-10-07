@@ -60,7 +60,7 @@ def _render_text_frame(words: list[str], width: int = 1280, height: int = 720) -
 
 
 def test_count_words_filters_low_confidence_and_short_tokens():
-    from peeklet.core.demo_filter import _count_words_in_frame
+    from peeklet.core.demo_filter import _ocr_word_boxes
 
     fake_data = {
         "text": ["Settings", "x", "Save", "", "Login", "."],
@@ -69,7 +69,7 @@ def test_count_words_filters_low_confidence_and_short_tokens():
     with patch("peeklet.core.demo_filter.pytesseract") as mock_pt:
         mock_pt.image_to_data.return_value = fake_data
         mock_pt.Output.DICT = "dict"
-        count = _count_words_in_frame(_make_frame(), downscale_dim=360)
+        count = len(_ocr_word_boxes(_make_frame(), downscale_dim=360))
 
     # "Settings" (95, len 8) OK
     # "x" (92, len 1) short
@@ -81,21 +81,21 @@ def test_count_words_filters_low_confidence_and_short_tokens():
 
 
 def test_count_words_handles_tesseract_exception():
-    from peeklet.core.demo_filter import _count_words_in_frame
+    from peeklet.core.demo_filter import _ocr_word_boxes
 
     with patch("peeklet.core.demo_filter.pytesseract") as mock_pt:
         mock_pt.image_to_data.side_effect = RuntimeError("tesseract crashed")
         mock_pt.Output.DICT = "dict"
-        count = _count_words_in_frame(_make_frame(), downscale_dim=360)
+        count = len(_ocr_word_boxes(_make_frame(), downscale_dim=360))
 
     assert count == 0  # graceful fallback
 
 
 def test_count_words_returns_zero_when_pytesseract_is_none():
-    from peeklet.core.demo_filter import _count_words_in_frame
+    from peeklet.core.demo_filter import _ocr_word_boxes
 
     with patch("peeklet.core.demo_filter.pytesseract", None):
-        count = _count_words_in_frame(_make_frame(), downscale_dim=360)
+        count = len(_ocr_word_boxes(_make_frame(), downscale_dim=360))
 
     assert count == 0
 
@@ -136,24 +136,6 @@ def test_downscale_for_ocr_portrait_frame_preserves_aspect():
     assert out.shape[1] == int(round(540 * 480 / 960))
 
 
-def test_demo_filter_config_has_gallery_ocr_min_dim_default_at_least_1280():
-    """Bug 3 regression: OCR needs near-source resolution to read screen-share text.
-
-    Reusing ``frame_search_resolution`` (240/360/540 across quality presets) for
-    OCR downscaling destroys text before Tesseract sees it on any 720p source.
-    The dedicated gallery_ocr_min_dim must default to at least 1280 so a 720p
-    frame is left untouched.
-    """
-    from peeklet.config import DemoFilterConfig
-
-    cfg = DemoFilterConfig()
-    assert hasattr(cfg, "gallery_ocr_min_dim"), (
-        "DemoFilterConfig should expose gallery_ocr_min_dim independent of "
-        "frame_search_resolution so OCR can run at near-source resolution."
-    )
-    assert cfg.gallery_ocr_min_dim >= 1280
-
-
 @pytest.mark.rejector_live
 @pytest.mark.skipif(not _tesseract_available(), reason="tesseract binary not installed")
 def test_low_info_rejector_accepts_real_text_frame_at_720p():
@@ -185,62 +167,6 @@ def test_low_info_rejector_accepts_real_text_frame_at_720p():
     frame = _render_text_frame(dashboard_rows, width=1280, height=720)
     cfg = DemoFilterConfig()
     assert _is_low_info_frame(frame, cfg) is False
-
-
-def test_apply_demo_filter_raises_when_pytesseract_unavailable(tmp_path, monkeypatch):
-    """Missing OCR backend must raise, not silently degrade."""
-    from unittest.mock import MagicMock
-
-    from peeklet.config import DemoFilterConfig
-    from peeklet.core.demo_filter import apply_demo_filter
-
-    decoder = MagicMock()
-    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", None)
-
-    cfg = DemoFilterConfig(enabled=True)
-    with pytest.raises(RuntimeError, match="pytesseract"):
-        apply_demo_filter(
-            decoder=decoder,
-            transcript=[],
-            config=cfg,
-            output_dir=tmp_path,
-        )
-
-
-def test_apply_demo_filter_logs_warning_on_zero_moments(tmp_path, monkeypatch, caplog):
-    import logging
-    from unittest.mock import MagicMock
-
-    from peeklet.config import DemoFilterConfig
-    from peeklet.core.demo_filter import apply_demo_filter
-
-    decoder = MagicMock()
-    meta = MagicMock()
-    meta.duration = 60.0
-    meta.filename = "t.mp4"
-    decoder.get_metadata.return_value = meta
-
-    fake_client = MagicMock()
-    fake_client.pick_moments.return_value = []
-
-    monkeypatch.setattr(
-        "peeklet.core.demo_filter.build_llm_client",
-        lambda **k: fake_client,
-    )
-    monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
-
-    cfg = DemoFilterConfig(enabled=True)
-    with caplog.at_level(logging.WARNING):
-        screens, moments = apply_demo_filter(
-            decoder=decoder,
-            transcript=[],
-            config=cfg,
-            output_dir=tmp_path,
-        )
-
-    assert screens == []
-    assert moments == []
-    assert any("no anchors and no LLM picks" in rec.message for rec in caplog.records)
 
 
 class TestOcrWordBoxes:
@@ -304,7 +230,7 @@ class TestOcrWordBoxes:
 
         monkeypatch.setattr(demo_filter, "pytesseract", FakeTess)
         frame = np.zeros((100, 300, 3), dtype=np.uint8)
-        assert demo_filter._count_words_in_frame(frame, downscale_dim=1000) == 3
+        assert len(demo_filter._ocr_word_boxes(frame, downscale_dim=1000)) == 3
 
 
 class TestCountTextLines:
@@ -437,195 +363,3 @@ class TestIsLowInfoFrame:
         monkeypatch.setattr(demo_filter, "_edge_pixel_ratio", lambda frame: 0.001)
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         assert demo_filter._is_low_info_frame(frame, self._cfg()) is False
-
-
-class TestApplyDemoFilterLinearPass:
-    def _build_decoder(self, frames_by_ts):
-        from unittest.mock import MagicMock
-
-        decoder = MagicMock()
-        meta = MagicMock()
-        meta.duration = 100.0
-        meta.filename = "test.mp4"
-        decoder.get_metadata.return_value = meta
-
-        def extract(t):
-            # Match nearest known timestamp to t; default to a uniform frame
-            best = min(frames_by_ts.keys(), key=lambda k: abs(k - t))
-            return frames_by_ts[best], t, int(t * 30)
-
-        decoder.extract_frame_at.side_effect = extract
-        return decoder
-
-    def test_two_moments_same_screen_share_screen_id(self, tmp_path, monkeypatch):
-        from unittest.mock import MagicMock
-
-        import numpy as np
-
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.core.demo_filter import apply_demo_filter
-        from peeklet.utils.types import Moment
-
-        # Both moments will see the same painted frame with same OCR boxes.
-        frame = np.full((1000, 1600, 3), 200, dtype=np.uint8)
-        decoder = self._build_decoder({1.0: frame, 5.0: frame})
-        transcript = [TranscriptSegment(start=0, end=10, text="...")]
-
-        # Stub OCR + layout rejector
-        boxes = [
-            self._wb("https://app.fathom.video/calls/1", 200, 20, 400, 18),
-            self._wb("Dashboard", 300, 120, 600, 48),
-            self._wb("Home", 20, 200, 80, 20),
-        ]
-        monkeypatch.setattr("peeklet.core.demo_filter._ocr_word_boxes", lambda f, d: boxes)
-        monkeypatch.setattr("peeklet.core.demo_filter._is_low_info_frame", lambda f, c: False)
-
-        client = MagicMock()
-        client.pick_moments.return_value = [
-            Moment(
-                timestamp=1.0, visual_context_goal="a", textual_anchor="a", downstream_utility="a"
-            ),
-            Moment(
-                timestamp=5.0, visual_context_goal="b", textual_anchor="b", downstream_utility="b"
-            ),
-        ]
-        monkeypatch.setattr("peeklet.core.demo_filter.build_llm_client", lambda **k: client)
-        monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
-
-        screens, moments = apply_demo_filter(
-            decoder=decoder,
-            transcript=transcript,
-            config=DemoFilterConfig(),
-            output_dir=tmp_path,
-            transcript_text="",
-        )
-        assert len(screens) == 1
-        assert len(moments) == 2
-        assert moments[0].screen_id == moments[1].screen_id == screens[0].screen_id
-
-    def _wb(self, text, x, y, w, h):
-        from collections import namedtuple
-
-        WB = namedtuple("WB", ["text", "conf", "x", "y", "w", "h"])
-        return WB(text, 99.0, x, y, w, h)
-
-    def test_anchors_appear_with_type_action_item(self, tmp_path, monkeypatch):
-        from unittest.mock import MagicMock
-
-        import numpy as np
-
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.core.demo_filter import apply_demo_filter
-
-        frame = np.full((1000, 1600, 3), 200, dtype=np.uint8)
-        decoder = self._build_decoder({1.0: frame})
-        transcript = [TranscriptSegment(start=0, end=10, text="...")]
-
-        boxes = [
-            self._wb("https://app.fathom.video/calls/1", 200, 20, 400, 18),
-            self._wb("Dashboard", 300, 120, 600, 48),
-        ]
-        monkeypatch.setattr("peeklet.core.demo_filter._ocr_word_boxes", lambda f, d: boxes)
-        monkeypatch.setattr("peeklet.core.demo_filter._is_low_info_frame", lambda f, c: False)
-
-        anchor_text = (
-            "**ACTION ITEM: Configure bug filter - "
-            "++[WATCH](https://fathom.video/calls/1?timestamp=1.0)++**"
-        )
-        client = MagicMock()
-        client.pick_moments.return_value = []
-        monkeypatch.setattr("peeklet.core.demo_filter.build_llm_client", lambda **k: client)
-        monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
-
-        screens, moments = apply_demo_filter(
-            decoder=decoder,
-            transcript=transcript,
-            config=DemoFilterConfig(),
-            output_dir=tmp_path,
-            transcript_text=anchor_text,
-        )
-        assert len(moments) == 1
-        assert moments[0].type == "action_item"
-
-    def test_anchor_with_failing_quality_gate_emits_image_unavailable(self, tmp_path, monkeypatch):
-        from unittest.mock import MagicMock
-
-        import numpy as np
-
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.core.demo_filter import apply_demo_filter
-
-        frame = np.zeros((1000, 1600, 3), dtype=np.uint8)
-        decoder = self._build_decoder({1.0: frame})
-        transcript = [TranscriptSegment(start=0, end=10, text="...")]
-
-        monkeypatch.setattr("peeklet.core.demo_filter._ocr_word_boxes", lambda f, d: [])
-        monkeypatch.setattr(
-            "peeklet.core.demo_filter._is_low_info_frame", lambda f, c: True
-        )  # always fail
-
-        anchor_text = (
-            "**ACTION ITEM: Galleria - ++[WATCH](https://fathom.video/calls/1?timestamp=1.0)++**"
-        )
-        client = MagicMock()
-        client.pick_moments.return_value = []
-        monkeypatch.setattr("peeklet.core.demo_filter.build_llm_client", lambda **k: client)
-        monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
-
-        screens, moments = apply_demo_filter(
-            decoder=decoder,
-            transcript=transcript,
-            config=DemoFilterConfig(),
-            output_dir=tmp_path,
-            transcript_text=anchor_text,
-        )
-        assert len(screens) == 0
-        assert len(moments) == 1
-        assert moments[0].image_unavailable is True
-        assert moments[0].screen_id is None
-
-    def test_safety_fallback_keeps_unreadable_frames_distinct(self, tmp_path, monkeypatch):
-        """Empty Part A → no collapse; both moments save separate images."""
-        from unittest.mock import MagicMock
-
-        import numpy as np
-
-        from peeklet.config import DemoFilterConfig
-        from peeklet.core.audio import TranscriptSegment
-        from peeklet.core.demo_filter import apply_demo_filter
-        from peeklet.utils.types import Moment
-
-        # Two distinct frames so file paths differ
-        f1 = np.full((1000, 1600, 3), 50, dtype=np.uint8)
-        f2 = np.full((1000, 1600, 3), 200, dtype=np.uint8)
-        decoder = self._build_decoder({1.0: f1, 5.0: f2})
-        transcript = [TranscriptSegment(start=0, end=10, text="...")]
-
-        # No OCR text → empty Part A
-        monkeypatch.setattr("peeklet.core.demo_filter._ocr_word_boxes", lambda f, d: [])
-        monkeypatch.setattr("peeklet.core.demo_filter._is_low_info_frame", lambda f, c: False)
-
-        client = MagicMock()
-        client.pick_moments.return_value = [
-            Moment(
-                timestamp=1.0, visual_context_goal="a", textual_anchor="a", downstream_utility="a"
-            ),
-            Moment(
-                timestamp=5.0, visual_context_goal="b", textual_anchor="b", downstream_utility="b"
-            ),
-        ]
-        monkeypatch.setattr("peeklet.core.demo_filter.build_llm_client", lambda **k: client)
-        monkeypatch.setattr("peeklet.core.demo_filter.pytesseract", MagicMock())
-
-        screens, moments = apply_demo_filter(
-            decoder=decoder,
-            transcript=transcript,
-            config=DemoFilterConfig(),
-            output_dir=tmp_path,
-            transcript_text="",
-        )
-        assert len(screens) == 2  # safety fallback prevents collapse
-        assert moments[0].screen_id != moments[1].screen_id

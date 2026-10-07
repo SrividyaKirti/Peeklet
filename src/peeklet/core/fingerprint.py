@@ -1,6 +1,6 @@
 """Content-addressable screen fingerprinting for demo-mode dedup.
 
-Each unique screen captured by the demo pipeline is identified by a
+Each unique screen captured by the screen pass is identified by a
 two-part fingerprint:
 
 * Part A — a normalized tuple of (url, heading, sidebar_text) extracted
@@ -241,7 +241,7 @@ def is_match(a: Fingerprint, b: Fingerprint, phash_threshold: int) -> bool:
 def part_a_is_empty(fp: Fingerprint, min_chars: int) -> bool:
     """True if every Part A field is shorter than ``min_chars``.
 
-    The dedup pipeline uses this to bypass collapse on frames where OCR
+    The dedup logic uses this to bypass collapse on frames where OCR
     failed completely — otherwise unrelated unreadable frames would all
     cluster under the same empty key and false-collapse.
     """

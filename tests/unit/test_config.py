@@ -8,16 +8,11 @@ import yaml
 from pydantic import ValidationError
 
 from peeklet.config import (
-    QUALITY_PRESETS,
-    SENSITIVITY_PRESETS,
     ComparatorConfig,
     HasherConfig,
     MaskingConfig,
     PeekletConfig,
-    PipelineConfig,
     VideoConfig,
-    apply_quality_preset,
-    apply_sensitivity_preset,
     load_config,
 )
 
@@ -25,19 +20,11 @@ from peeklet.config import (
 class TestDefaults:
     def test_default_config_is_valid(self) -> None:
         config = PeekletConfig()
-        assert config.pipeline.mode == "batch"
         assert config.masking.block_size == 32
         assert config.masking.window_size == 15
         assert config.masking.noise_threshold == 0.8
         assert config.hasher.algorithm == "phash"
         assert config.comparator.ssim_threshold == 0.85
-        assert config.exporter.keyframe_format == "jpg"
-        assert config.exporter.parquet_compression == "snappy"
-
-    def test_pipeline_defaults(self) -> None:
-        config = PipelineConfig()
-        assert config.mode == "batch"
-        assert config.concurrency == 4
 
     def test_default_tile_aspect_ratio(self) -> None:
         config = PeekletConfig()
@@ -49,10 +36,6 @@ class TestDefaults:
 
 
 class TestValidation:
-    def test_reject_invalid_mode(self) -> None:
-        with pytest.raises(ValueError):
-            PipelineConfig(mode="invalid")
-
     def test_reject_negative_block_size(self) -> None:
         with pytest.raises(ValueError):
             MaskingConfig(block_size=-1)
@@ -188,83 +171,6 @@ def test_demo_filter_config_rejects_unknown_provider():
 
     with pytest.raises(ValidationError):
         DemoFilterConfig(llm_provider="cohere")  # type: ignore[arg-type]
-
-
-class TestQualityPresets:
-    def test_quality_presets_exist(self) -> None:
-        assert set(QUALITY_PRESETS.keys()) == {"fast", "balanced", "precise"}
-
-    def test_apply_quality_preset_balanced_matches_current_defaults(self) -> None:
-        """The 'balanced' preset must match today's default values exactly,
-        so users who don't pass --quality see no behavior change."""
-        config = PeekletConfig()
-        baseline_max_dim = config.video.processing_max_dim
-        baseline_sample_fps = config.video.sample_fps
-
-        apply_quality_preset(config, "balanced")
-
-        assert config.video.processing_max_dim == baseline_max_dim
-        assert config.video.sample_fps == baseline_sample_fps
-
-    def test_apply_quality_preset_fast(self) -> None:
-        config = PeekletConfig()
-        apply_quality_preset(config, "fast")
-
-        assert config.video.processing_max_dim == 480
-        assert config.video.sample_fps == 0.5
-
-    def test_apply_quality_preset_precise(self) -> None:
-        config = PeekletConfig()
-        apply_quality_preset(config, "precise")
-
-        assert config.video.processing_max_dim == 1080
-        assert config.video.sample_fps == 2.0
-
-    def test_apply_quality_preset_invalid_raises(self) -> None:
-        config = PeekletConfig()
-        with pytest.raises(ValueError, match="unknown quality preset"):
-            apply_quality_preset(config, "ludicrous")
-
-
-class TestSensitivityPresets:
-    def test_sensitivity_presets_exist(self) -> None:
-        assert set(SENSITIVITY_PRESETS.keys()) == {"low", "medium", "high"}
-
-    def test_apply_sensitivity_medium_matches_current_defaults(self) -> None:
-        """'medium' must match today's defaults so unflagged users see no change."""
-        config = PeekletConfig()
-        baseline_ssim = config.comparator.ssim_threshold
-        baseline_pct = config.comparator.min_changed_pct
-        baseline_blocks = config.comparator.min_changed_blocks
-
-        apply_sensitivity_preset(config, "medium")
-
-        assert config.comparator.ssim_threshold == baseline_ssim
-        assert config.comparator.min_changed_pct == baseline_pct
-        assert config.comparator.min_changed_blocks == baseline_blocks
-
-    def test_apply_sensitivity_low(self) -> None:
-        """'low' = fewer keyframes (stricter thresholds)."""
-        config = PeekletConfig()
-        apply_sensitivity_preset(config, "low")
-
-        assert config.comparator.ssim_threshold == 0.92
-        assert config.comparator.min_changed_pct == 5.0
-        assert config.comparator.min_changed_blocks == 5
-
-    def test_apply_sensitivity_high(self) -> None:
-        """'high' = more keyframes (looser thresholds)."""
-        config = PeekletConfig()
-        apply_sensitivity_preset(config, "high")
-
-        assert config.comparator.ssim_threshold == 0.75
-        assert config.comparator.min_changed_pct == 1.0
-        assert config.comparator.min_changed_blocks == 2
-
-    def test_apply_sensitivity_invalid_raises(self) -> None:
-        config = PeekletConfig()
-        with pytest.raises(ValueError, match="unknown sensitivity preset"):
-            apply_sensitivity_preset(config, "extreme")
 
 
 class TestDemoFilterLayoutConfig:

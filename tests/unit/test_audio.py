@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from peeklet.core.audio import TranscriptSegment, align_transcript, parse_transcript
+from peeklet.core.audio import TranscriptSegment, parse_transcript
 
 try:
     import pydub  # noqa: F401
@@ -203,33 +203,6 @@ class TestParseFathomMd:
         assert segments[0].speaker is None
 
 
-class TestAlignTranscript:
-    def test_align_finds_overlapping_segment(self) -> None:
-        segments = [
-            TranscriptSegment(start=0.0, end=3.0, text="Hello"),
-            TranscriptSegment(start=5.0, end=8.0, text="Click here"),
-            TranscriptSegment(start=10.0, end=12.0, text="Done"),
-        ]
-        assert align_transcript(6.0, segments) == "Click here"
-
-    def test_align_returns_none_for_gap(self) -> None:
-        segments = [
-            TranscriptSegment(start=0.0, end=3.0, text="Hello"),
-            TranscriptSegment(start=5.0, end=8.0, text="Click here"),
-        ]
-        assert align_transcript(4.0, segments) is None
-
-    def test_align_joins_multiple_overlapping(self) -> None:
-        segments = [
-            TranscriptSegment(start=0.0, end=5.0, text="First part"),
-            TranscriptSegment(start=4.0, end=8.0, text="Second part"),
-        ]
-        assert align_transcript(4.5, segments) == "First part | Second part"
-
-    def test_align_empty_segments(self) -> None:
-        assert align_transcript(1.0, []) is None
-
-
 class TestParseFathomAnchors:
     def test_extracts_action_items_with_watch_timestamps(self) -> None:
         from peeklet.core.audio import parse_fathom_anchors
@@ -290,23 +263,6 @@ class TestSpeechSilenceDetection:
         assert len(speech_segments) >= 1
         has_speech_in_middle = any(s.start < 2.0 and s.end > 1.0 for s in speech_segments)
         assert has_speech_in_middle
-
-    def test_get_audio_activity_at_timestamp(self, tmp_path: Path) -> None:
-        from pydub import AudioSegment
-        from pydub.generators import Sine
-
-        silence = AudioSegment.silent(duration=1000)
-        tone = Sine(440).to_audio_segment(duration=1000).apply_gain(-10)
-        audio = silence + tone + silence
-        audio_path = tmp_path / "test.wav"
-        audio.export(str(audio_path), format="wav")
-
-        from peeklet.core.audio import detect_speech_segments, get_audio_activity
-
-        speech_segments = detect_speech_segments(audio_path)
-        assert get_audio_activity(0.5, speech_segments) == "silence"
-        assert get_audio_activity(1.5, speech_segments) == "speech"
-        assert get_audio_activity(2.5, speech_segments) == "silence"
 
     def test_silence_only_audio(self, tmp_path: Path) -> None:
         from pydub import AudioSegment
