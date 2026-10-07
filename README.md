@@ -125,7 +125,7 @@ video ──► 1 fps samples ──► change detection ──► candidates (+
                                  select ≤ N ─► blocks ─► transcript.json + frames
 ```
 
-**Checkpoints.** A checkpoint is a timestamp where Peeklet makes sure it has a good capture and boosts the screen on display. There are three kinds: Fathom action items, speech onsets (speech starting after at least 1.5s of silence), and verbal cues (lines that mention UI nouns, product words or deictic phrases like "here you can see"). Without Fathom markers there are no action items; without a decodable audio track a warning is recorded and there are no onsets.
+**Checkpoints.** A checkpoint is a timestamp where Peeklet makes sure it has a good capture and boosts the screen on display. There are three kinds: Fathom action items, speech onsets (speech starting after at least 1.5s of silence), and verbal cues (lines that mention UI nouns such as "dashboard" or "settings", product words, or deictic phrases; e.g. "look at this dashboard"). Without Fathom markers there are no action items; without a decodable audio track a warning is recorded and there are no onsets.
 
 **Screens.** The video is sampled at 1 fps and streamed through adaptive masking (which absorbs flickering webcam tiles), pHash and SSIM to find changes. Low-information frames (gallery views, blank loaders) are rejected. The rest are OCR'd and fingerprinted (URL, heading, sidebar text plus a header-strip pHash) and grouped into screens across the whole video, so a screen shown at 1:40 and again at 8:20 is one screen with one image and one description. Each screen keeps its best frame, the one with the most OCR words.
 
@@ -166,9 +166,11 @@ If the chosen provider's credentials are missing, Peeklet warns once and continu
 Evaluation scripts live in `eval/` and compare Peeklet's choices against two public datasets:
 
 ```bash
-uv run python eval/lpm_eval.py     # LPM dataset
-uv run python eval/guide_eval.py   # GUIDE dataset
+uv run --with yt-dlp python -m eval.lpm_eval --limit 10     # LPM dataset
+uv run python -m eval.guide_eval --limit 5 [--llm]          # GUIDE dataset
 ```
+
+GUIDE is gated: accept the dataset terms on Hugging Face and provide a token via `HF_TOKEN` (or `~/.cache/huggingface/token`).
 
 Dataset licenses: LPM is CC BY-NC-SA 4.0; GUIDE is CC BY 4.0 and gated (request access on Hugging Face first). Downloaded data and results go to `eval/data/` and `eval/results/`, which are git-ignored. Dataset content is never committed.
 

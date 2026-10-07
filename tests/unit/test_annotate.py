@@ -84,6 +84,23 @@ def test_llm_descriptions_and_cache(
     assert data[0]["visual_context"].startswith("Screen showing")
 
 
+def test_all_llm_calls_failed_falls_back(demo: tuple[Path, Path], tmp_path: Path) -> None:
+    from peeklet.config import PeekletConfig
+
+    class FailingLLM:
+        provider, model = "stub", "stub"
+
+        def judge_screen(self, *a: object, **k: object) -> ScreenJudgment:
+            raise RuntimeError("boom")
+
+    cfg = PeekletConfig(llm_cache_dir=str(tmp_path / "cache"))
+    entries = annotate(*demo, tmp_path / "out", config=cfg, llm_client=FailingLLM(), ocr=colour_ocr)
+    assert any("every LLM call failed" in w for w in entries.stats.warnings)
+    data = json.loads((tmp_path / "out" / "transcript.json").read_text())
+    assert any(e["image"] for e in data)
+    assert all("visual_context" not in e for e in data)
+
+
 def test_missing_key_falls_back_to_no_llm(
     demo: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

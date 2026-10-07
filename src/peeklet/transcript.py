@@ -78,16 +78,17 @@ def action_item_checkpoints(path: Path) -> list[Checkpoint]:
 
 
 def _parse_timestamp(ts: str) -> float:
-    """Convert 'HH:MM:SS,mmm' or 'HH:MM:SS.mmm' to seconds."""
+    """Convert '[HH:]MM:SS,mmm' or '[HH:]MM:SS.mmm' to seconds."""
     ts = ts.strip().replace(",", ".")
-    parts = ts.split(":")
-    hours = float(parts[0])
-    minutes = float(parts[1])
-    seconds = float(parts[2])
+    parts = [float(p) for p in ts.split(":")]
+    if len(parts) == 2:
+        parts.insert(0, 0.0)
+    hours, minutes, seconds = parts
     return hours * 3600 + minutes * 60 + seconds
 
 
-_TIMESTAMP_RE = re.compile(r"(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})")
+_TS = r"(?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3}"
+_TIMESTAMP_RE = re.compile(rf"({_TS})\s*-->\s*({_TS})")
 
 
 def _parse_srt(text: str) -> list[Line]:

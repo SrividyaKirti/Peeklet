@@ -145,21 +145,25 @@ class JudgmentCache:
         if not path.is_file():
             return None
         try:
-            return parse_judgment(path.read_text())
+            return parse_judgment(path.read_text(encoding="utf-8"))
         except (OSError, LLMResponseError):
             return None
 
     def put(self, req: JudgeRequest, judgment: ScreenJudgment) -> None:
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._path(req).write_text(
-            json.dumps(
-                {
-                    "include": judgment.include,
-                    "reason": judgment.reason,
-                    "visual_context": judgment.visual_context,
-                }
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            self._path(req).write_text(
+                json.dumps(
+                    {
+                        "include": judgment.include,
+                        "reason": judgment.reason,
+                        "visual_context": judgment.visual_context,
+                    }
+                ),
+                encoding="utf-8",
             )
-        )
+        except OSError as exc:
+            logger.warning("could not write LLM cache entry: %s", exc)
 
 
 def judge_screens(

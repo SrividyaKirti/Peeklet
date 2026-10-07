@@ -51,7 +51,7 @@ def detect_speech_segments(
     Returns list of (start, end) tuples in seconds. Raises RuntimeError if the
     audio cannot be decoded.
     """
-    samples = _decode_audio(media_path).astype(np.float64)
+    samples = _decode_audio(media_path)
     chunk_len = max(1, _SAMPLE_RATE * chunk_ms // 1000)
     duration_s = samples.size / _SAMPLE_RATE
 
@@ -59,7 +59,7 @@ def detect_speech_segments(
     current_start: float | None = None
 
     for offset in range(0, samples.size, chunk_len):
-        chunk = samples[offset : offset + chunk_len]
+        chunk = samples[offset : offset + chunk_len].astype(np.float64)
         rms = float(np.sqrt(np.mean(chunk * chunk)))
         dbfs = 20 * math.log10(rms / 32768) if rms > 0 else -math.inf
         start_s = offset / _SAMPLE_RATE

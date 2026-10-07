@@ -71,6 +71,9 @@ def annotate(
         logger.warning(msg)
         warnings.append(msg)
 
+    if ocr is None:
+        require_tesseract()
+
     # 1. Transcript
     lines = split_long_lines(parse_transcript(transcript), cfg.max_line_seconds)
 
@@ -85,7 +88,6 @@ def annotate(
 
     # 3–4. Screens
     if ocr is None:
-        require_tesseract()
 
         def ocr_fn(frame: Any) -> Any:
             return ocr_word_boxes(frame, cfg.ocr_max_dim)

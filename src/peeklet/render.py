@@ -150,11 +150,14 @@ def write_outputs(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "transcript.json").write_text(
-        json.dumps([e.to_dict() for e in entries], indent=2, ensure_ascii=False) + "\n"
+        json.dumps([e.to_dict() for e in entries], indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
     for s in kept:
         (out_dir / files[s.id]).write_bytes(s.image_jpeg)
 
 
 def write_debug(path: Path, payload: dict[str, Any]) -> None:
-    Path(path).write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    Path(path).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )

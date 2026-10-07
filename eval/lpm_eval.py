@@ -149,7 +149,11 @@ def main() -> int:
         if got is None:
             print(f"skip {row['video_id']}: download or captions unavailable", file=sys.stderr)
             continue
-        res = evaluate(row, *got, tolerance=args.tolerance)
+        try:
+            res = evaluate(row, *got, tolerance=args.tolerance)
+        except Exception as exc:
+            print(f"skip {row['video_id']}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
         print(json.dumps(res))
         results.append(res)
     if not results:

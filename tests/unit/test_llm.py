@@ -86,6 +86,15 @@ def test_cache_round_trip_and_key_sensitivity(tmp_path: Path) -> None:
     assert other_model.get(REQ) is None
 
 
+def test_cache_put_failure_is_non_fatal(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    client = StubClient(ScreenJudgment(True, "r", "v"))
+    cache = JudgmentCache(blocker / "sub", client.provider, client.model)
+    out, warnings = judge_screens(client, [REQ], cache, concurrency=1)
+    assert out == {"S1": ScreenJudgment(True, "r", "v")} and warnings == []
+
+
 def test_judge_screens_uses_cache(tmp_path: Path) -> None:
     client = StubClient(ScreenJudgment(True, "r", "v"))
     cache = JudgmentCache(tmp_path, client.provider, client.model)

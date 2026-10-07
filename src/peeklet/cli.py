@@ -37,7 +37,10 @@ from peeklet.transcript import TranscriptError
 )
 @click.option("--no-llm", is_flag=True, help="Heuristic selection only; no descriptions.")
 @click.option(
-    "--llm-provider", type=click.Choice(["anthropic", "openai", "openrouter"]), default=None
+    "--llm-provider",
+    type=click.Choice(["anthropic", "openai", "openrouter"]),
+    default=None,
+    help="LLM provider for screen judging and descriptions (default anthropic).",
 )
 @click.option("--llm-model", default=None, help="Model id (default claude-haiku-4-5).")
 @click.option(
@@ -45,6 +48,7 @@ from peeklet.transcript import TranscriptError
     "config_path",
     default=None,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to a Peeklet config file (YAML or JSON) overriding the defaults.",
 )
 @click.option("--debug", is_flag=True, help="Also write debug.json with scoring details.")
 def main(

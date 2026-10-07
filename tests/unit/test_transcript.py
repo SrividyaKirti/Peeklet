@@ -47,6 +47,20 @@ class TestParseSrt:
 
 
 class TestParseVtt:
+    def test_vtt_without_hours(self, tmp_path: Path) -> None:
+        f = tmp_path / "t.vtt"
+        f.write_text("WEBVTT\n\n00:01.000 --> 00:04.500\nOne\n\n01:05.250 --> 01:07.000\nTwo\n")
+        segs = parse_transcript(f)
+        assert segs == [Line(1.0, 4.5, "One"), Line(65.25, 67.0, "Two")]
+
+    def test_vtt_mixed_hours(self, tmp_path: Path) -> None:
+        f = tmp_path / "t.vtt"
+        f.write_text(
+            "WEBVTT\n\n00:01.000 --> 00:04.500\nOne\n\n01:00:05.000 --> 01:00:07.000\nTwo\n"
+        )
+        segs = parse_transcript(f)
+        assert [(s.start, s.end) for s in segs] == [(1.0, 4.5), (3605.0, 3607.0)]
+
     def test_parse_basic_vtt(self, tmp_path: Path) -> None:
         vtt_file = tmp_path / "test.vtt"
         vtt_file.write_text(

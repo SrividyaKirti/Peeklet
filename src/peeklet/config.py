@@ -81,6 +81,6 @@ def load_config(path: Path | None) -> PeekletConfig:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(text) if path.suffix in (".yaml", ".yml") else json.loads(text)
     return PeekletConfig.model_validate(data or {})
