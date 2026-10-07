@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -88,3 +89,35 @@ def dhash_64(frame: np.ndarray[Any, np.dtype[Any]]) -> int:
 def hamming_distance(a: int, b: int) -> int:
     """Number of differing bits between two non-negative integers."""
     return (a ^ b).bit_count()
+
+
+def downscale_to_max_dim(frame: np.ndarray, max_dim: int) -> np.ndarray:
+    """Resize so the longest edge is at most max_dim; returns the input if already small."""
+    from PIL import Image
+
+    h, w = frame.shape[:2]
+    longest = max(h, w)
+    if longest <= max_dim:
+        return frame
+    scale = max_dim / longest
+    size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+    return np.asarray(Image.fromarray(frame).resize(size, Image.Resampling.BILINEAR))
+
+
+def encode_jpeg(frame: np.ndarray, quality: int = 90, max_edge: int | None = None) -> bytes:
+    """Encode an RGB uint8 frame as JPEG, optionally shrinking the long edge first."""
+    from PIL import Image
+
+    if max_edge is not None:
+        frame = downscale_to_max_dim(frame, max_edge)
+    buf = io.BytesIO()
+    Image.fromarray(ensure_rgb_uint8(frame)).save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def decode_jpeg(data: bytes) -> np.ndarray:
+    """Decode JPEG bytes to an RGB uint8 array."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as img:
+        return np.asarray(img.convert("RGB"))

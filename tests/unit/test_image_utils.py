@@ -6,7 +6,10 @@ import pytest
 from peeklet.image_utils import (
     compute_block_grid,
     crop_region,
+    decode_jpeg,
     dhash_64,
+    downscale_to_max_dim,
+    encode_jpeg,
     ensure_rgb_uint8,
     hamming_distance,
 )
@@ -111,3 +114,22 @@ class TestHammingDistance:
 
     def test_fully_different(self) -> None:
         assert hamming_distance(0, 0xFFFFFFFFFFFFFFFF) == 64
+
+
+def test_downscale_keeps_small_frames() -> None:
+    f = np.zeros((100, 200, 3), dtype=np.uint8)
+    assert downscale_to_max_dim(f, 300) is f
+
+
+def test_downscale_preserves_aspect() -> None:
+    f = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    assert downscale_to_max_dim(f, 960).shape == (540, 960, 3)
+
+
+def test_jpeg_round_trip_and_max_edge() -> None:
+    f = np.full((400, 800, 3), 128, dtype=np.uint8)
+    data = encode_jpeg(f, quality=90, max_edge=200)
+    assert data[:2] == b"\xff\xd8"
+    back = decode_jpeg(data)
+    assert back.shape == (100, 200, 3)
+    assert abs(int(back.mean()) - 128) <= 2

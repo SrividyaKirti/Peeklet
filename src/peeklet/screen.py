@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 import numpy as np
 
+from peeklet.image_utils import downscale_to_max_dim
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -35,25 +37,6 @@ class WordBox(NamedTuple):
     h: int
 
 
-def _downscale_for_ocr(frame: np.ndarray, downscale_dim: int) -> np.ndarray:
-    """Resize ``frame`` so its longest edge equals ``downscale_dim``.
-
-    Returns the original frame if it is already smaller. Uses Pillow for
-    a high-quality resize without pulling in extra dependencies.
-    """
-    from PIL import Image
-
-    h, w = frame.shape[:2]
-    longest = max(h, w)
-    if longest <= downscale_dim:
-        return frame
-    scale = downscale_dim / longest
-    new_w = max(1, int(round(w * scale)))
-    new_h = max(1, int(round(h * scale)))
-    img = Image.fromarray(frame).resize((new_w, new_h), Image.Resampling.BILINEAR)
-    return np.asarray(img)
-
-
 def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
     """Run Tesseract once and return accepted word boxes.
 
@@ -65,7 +48,7 @@ def _ocr_word_boxes(frame: np.ndarray, downscale_dim: int) -> list[WordBox]:
     if pytesseract is None:
         return []
 
-    downscaled = _downscale_for_ocr(frame, downscale_dim)
+    downscaled = downscale_to_max_dim(frame, downscale_dim)
     try:
         data = pytesseract.image_to_data(downscaled, output_type=pytesseract.Output.DICT)
     except Exception as exc:
