@@ -109,3 +109,28 @@ def test_ocr_runs_once_per_visual_state() -> None:
 def test_chosen_frame_is_jpeg() -> None:
     [a] = run([A] * 2).screens
     assert a.image_jpeg[:2] == b"\xff\xd8"
+
+
+def _body_only_run(n: int, cp_t: float):
+    def ocr_body_only(f: np.ndarray) -> list[WordBox]:
+        return [WordBox(f"w{i}", 95.0, 60, 110 + i * 7, 20, 4) for i in range(12)]
+
+    samples = [Sample(float(i), np.full((200, 200, 3), A, dtype=np.uint8)) for i in range(n)]
+    return build_screens(
+        samples,
+        [Checkpoint(t=cp_t, kind="speech_onset")],
+        PeekletConfig(),
+        ocr_body_only,
+        video_end=float(n),
+    )
+
+
+def test_checkpoint_winner_that_is_change_candidate_not_duplicated() -> None:
+    res = _body_only_run(5, 0.0)
+    assert len(res.screens) == 1
+    assert res.screens[0].occurrences == [(0.0, 5.0)]
+
+
+def test_static_empty_part_a_screen_with_mid_checkpoint_is_one_screen() -> None:
+    res = _body_only_run(12, 8.0)
+    assert len(res.screens) == 1

@@ -56,7 +56,7 @@ class _Analysis:
 class _Window:
     cp: Checkpoint
     best_key: tuple[int, float] | None = None
-    best: tuple[float, _Analysis, np.ndarray, float] | None = None
+    best: tuple[float, _Analysis, np.ndarray, float, str] | None = None
 
 
 class _Tracker:
@@ -68,6 +68,7 @@ class _Tracker:
             phash_threshold=cfg.phash_threshold, ocr_field_min_chars=cfg.ocr_field_min_chars
         )
         self.screens: dict[str, Screen] = {}
+        self.key_screen: dict[str, str] = {}
         self.events: dict[float, str | None] = {}
         self.warnings: list[str] = []
 
@@ -85,11 +86,13 @@ class _Tracker:
         self.cache[key] = result
         return result
 
-    def assign(self, t: float, a: _Analysis, frame: np.ndarray, change: float) -> None:
+    def assign(self, t: float, a: _Analysis, frame: np.ndarray, change: float, key: str) -> None:
         if a.low_info:
             self.events[t] = None
             return
-        sid = self.index.lookup(a.fingerprint)
+        sid = self.key_screen.get(key)
+        if sid is None:
+            sid = self.index.lookup(a.fingerprint)
         if sid is None:
             sid = f"S{len(self.screens) + 1}"
             self.index.register(a.fingerprint, screen_id=sid)
@@ -108,6 +111,7 @@ class _Tracker:
                 s.frame_t = t
                 s.ocr_text = a.ocr_text
                 s.word_count = a.word_count
+        self.key_screen[key] = sid
         self.events[t] = sid
 
     def close(self, win: _Window) -> None:
@@ -117,8 +121,10 @@ class _Tracker:
                 f"{win.cp.kind} checkpoint at {format_hms(win.cp.t)}"
             )
             return
-        t, a, frame, change = win.best
-        self.assign(t, a, frame, change)
+        t, a, frame, change, key = win.best
+        if t in self.events:
+            return
+        self.assign(t, a, frame, change, key)
 
 
 def build_screens(
@@ -153,14 +159,14 @@ def build_screens(
             continue
         analysis = tracker.analyze(sample.frame, res.key)
         if res.changed:
-            tracker.assign(sample.t, analysis, sample.frame, res.change)
+            tracker.assign(sample.t, analysis, sample.frame, res.change, res.key)
         if analysis.low_info:
             continue
         for win in active:
             rank = (analysis.word_count, -abs(sample.t - win.cp.t))
             if win.best_key is None or rank > win.best_key:
                 win.best_key = rank
-                win.best = (sample.t, analysis, sample.frame, res.change)
+                win.best = (sample.t, analysis, sample.frame, res.change, res.key)
 
     for win in open_windows:
         tracker.close(win)
