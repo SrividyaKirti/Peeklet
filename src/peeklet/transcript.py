@@ -1,33 +1,80 @@
-"""Transcript parsing (SRT, VTT, Fathom markdown) and Fathom action anchors."""
+"""Transcript parsing (SRT, VTT, Fathom markdown) and Fathom action items."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from peeklet.types import Line
+from peeklet.types import Checkpoint, Line
+
+
+class TranscriptError(ValueError):
+    """The transcript is missing, unreadable, or contains no timestamped lines."""
 
 
 def parse_transcript(path: Path) -> list[Line]:
-    """Parse a transcript file into timestamped segments.
-
-    Auto-detects format by file extension:
-    - ``.srt`` — SubRip
-    - ``.vtt`` — WebVTT
-    - ``.md`` — Fathom-style markdown (lines like
-      ``++[@MM:SS](url?timestamp=N.NN)++ - **Speaker**`` followed by spoken text)
-    """
+    """Parse .srt, .vtt or Fathom .md into lines. Raises TranscriptError on bad input."""
     path = Path(path)
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return []
-
+    if not path.is_file():
+        raise TranscriptError(f"Transcript not found: {path}")
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise TranscriptError(f"Could not read transcript {path}: {exc}") from exc
     suffix = path.suffix.lower()
     if suffix == ".vtt":
-        return _parse_vtt(text)
-    if suffix == ".md":
-        return _parse_fathom_md(text)
-    return _parse_srt(text)
+        lines = _parse_vtt(text)
+    elif suffix == ".md":
+        lines = _parse_fathom_md(text)
+    else:
+        lines = _parse_srt(text)
+    if not lines:
+        raise TranscriptError(f"Transcript {path} has no timestamped lines")
+    return lines
+
+
+_SENTENCE_BREAK_RE = re.compile(r"(?<=[.?!])\s+")
+
+
+def split_long_lines(lines: list[Line], max_seconds: float) -> list[Line]:
+    """Split lines longer than max_seconds at sentence boundaries, timing pieces by length."""
+    out: list[Line] = []
+    for ln in lines:
+        duration = ln.end - ln.start
+        parts = [p.strip() for p in _SENTENCE_BREAK_RE.split(ln.text) if p.strip()]
+        if duration <= max_seconds or len(parts) < 2:
+            out.append(ln)
+            continue
+        total = sum(len(p) for p in parts)
+        t = ln.start
+        for i, part in enumerate(parts):
+            end = ln.end if i == len(parts) - 1 else round(t + duration * len(part) / total, 3)
+            out.append(Line(start=t, end=end, text=part, speaker=ln.speaker))
+            t = end
+    return out
+
+
+def parse_fathom_action_items(text: str) -> list[Checkpoint]:
+    """Extract Fathom ACTION ITEM ... [WATCH](...?timestamp=N) markers, deduplicated."""
+    seen: set[tuple[float, str]] = set()
+    found: list[Checkpoint] = []
+    for match in _FATHOM_ACTION_RE.finditer(text):
+        label = match.group(1).strip()
+        t = float(match.group(2))
+        if (t, label) in seen:
+            continue
+        seen.add((t, label))
+        found.append(Checkpoint(t=t, kind="action_item", label=label))
+    found.sort(key=lambda c: c.t)
+    return found
+
+
+def action_item_checkpoints(path: Path) -> list[Checkpoint]:
+    """Action-item checkpoints for Fathom markdown transcripts; [] for other formats."""
+    path = Path(path)
+    if path.suffix.lower() != ".md":
+        return []
+    return parse_fathom_action_items(path.read_text(encoding="utf-8"))
 
 
 def _parse_timestamp(ts: str) -> float:
@@ -80,44 +127,6 @@ _FATHOM_ACTION_RE = re.compile(
     r"\*\*ACTION ITEM:\s*(.+?)\s*-\s*"
     r"\+\+\[WATCH\]\([^?]*\?timestamp=(\d+(?:\.\d+)?)\)\+\+\*\*"
 )
-
-
-def parse_fathom_anchors(text: str) -> list:
-    """Extract ACTION ITEM...WATCH markers as privileged anchor Moments.
-
-    Fathom inlines these as::
-
-        **ACTION ITEM: <desc> - ++[WATCH](https://fathom.video/...?timestamp=<s>)++**
-
-    Each marker often appears twice on consecutive lines; this function
-    deduplicates by (timestamp, description) before returning.
-
-    Returns Moments sorted by timestamp with ``source="anchor"``.
-    """
-    from peeklet.types import Moment
-
-    seen: set[tuple[float, str]] = set()
-    anchors: list[Moment] = []
-
-    for match in _FATHOM_ACTION_RE.finditer(text):
-        description = match.group(1).strip()
-        timestamp = float(match.group(2))
-        key = (timestamp, description)
-        if key in seen:
-            continue
-        seen.add(key)
-        anchors.append(
-            Moment(
-                timestamp=timestamp,
-                visual_context_goal=description,
-                textual_anchor=match.group(0),
-                downstream_utility="Action item flagged by meeting tool — guaranteed capture",
-                source="anchor",
-            )
-        )
-
-    anchors.sort(key=lambda m: m.timestamp)
-    return anchors
 
 
 def _parse_fathom_md(text: str) -> list[Line]:

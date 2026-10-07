@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from peeklet.transcript import parse_transcript
+from peeklet.transcript import (
+    TranscriptError,
+    action_item_checkpoints,
+    parse_fathom_action_items,
+    parse_transcript,
+    split_long_lines,
+)
 from peeklet.types import Line
 
 
@@ -36,8 +42,8 @@ class TestParseSrt:
     def test_parse_empty_srt(self, tmp_path: Path) -> None:
         srt_file = tmp_path / "test.srt"
         srt_file.write_text("")
-        segments = parse_transcript(srt_file)
-        assert segments == []
+        with pytest.raises(TranscriptError):
+            parse_transcript(srt_file)
 
 
 class TestParseVtt:
@@ -197,10 +203,8 @@ class TestParseFathomMd:
         assert segments[0].speaker is None
 
 
-class TestParseFathomAnchors:
+class TestParseFathomActionItems:
     def test_extracts_action_items_with_watch_timestamps(self) -> None:
-        from peeklet.transcript import parse_fathom_anchors
-
         text = (
             "**ACTION ITEM: Fix missing assistant prompt - "
             "++[WATCH](https://fathom.video/calls/123?timestamp=232.9999)++**\n"
@@ -210,28 +214,86 @@ class TestParseFathomAnchors:
             "**ACTION ITEM: Investigate Policy Health guard-flag issue; fix - "
             "++[WATCH](https://fathom.video/calls/123?timestamp=455.9999)++**\n"
         )
-        anchors = parse_fathom_anchors(text)
+        cps = parse_fathom_action_items(text)
 
-        assert len(anchors) == 2  # deduped consecutive duplicate
-        assert anchors[0].timestamp == pytest.approx(232.9999)
-        assert anchors[0].source == "anchor"
-        assert "Fix missing assistant prompt" in anchors[0].visual_context_goal
-        assert anchors[1].timestamp == pytest.approx(455.9999)
+        assert len(cps) == 2  # deduped consecutive duplicate
+        assert cps[0].t == pytest.approx(232.9999)
+        assert cps[0].kind == "action_item"
+        assert "Fix missing assistant prompt" in cps[0].label
+        assert cps[1].t == pytest.approx(455.9999)
 
     def test_returns_empty_on_no_action_items(self) -> None:
-        from peeklet.transcript import parse_fathom_anchors
-
         text = "Just some regular transcript text with no action items.\n"
-        assert parse_fathom_anchors(text) == []
+        assert parse_fathom_action_items(text) == []
 
     def test_sorted_by_timestamp(self) -> None:
-        from peeklet.transcript import parse_fathom_anchors
-
         text = (
             "**ACTION ITEM: Second - "
             "++[WATCH](https://fathom.video/calls/1?timestamp=500.0)++**\n"
             "**ACTION ITEM: First - "
             "++[WATCH](https://fathom.video/calls/1?timestamp=100.0)++**\n"
         )
-        anchors = parse_fathom_anchors(text)
-        assert [a.timestamp for a in anchors] == [100.0, 500.0]
+        assert [c.t for c in parse_fathom_action_items(text)] == [100.0, 500.0]
+
+
+class TestTranscriptErrors:
+    def test_missing_file(self, tmp_path: Path) -> None:
+        with pytest.raises(TranscriptError, match="not found"):
+            parse_transcript(tmp_path / "missing.vtt")
+
+    def test_empty_file(self, tmp_path: Path) -> None:
+        p = tmp_path / "t.vtt"
+        p.write_text("WEBVTT\n\n")
+        with pytest.raises(TranscriptError, match="no timestamped lines"):
+            parse_transcript(p)
+
+    def test_undecodable_file(self, tmp_path: Path) -> None:
+        p = tmp_path / "t.srt"
+        p.write_bytes(b"\xff\xfe\x00bad")
+        with pytest.raises(TranscriptError):
+            parse_transcript(p)
+
+
+class TestSplitLongLines:
+    def test_short_lines_unchanged(self) -> None:
+        lines = [Line(0.0, 5.0, "One. Two.", "A")]
+        assert split_long_lines(lines, 8.0) == lines
+
+    def test_long_line_without_boundary_unchanged(self) -> None:
+        lines = [Line(0.0, 20.0, "no sentence end here at all", None)]
+        assert split_long_lines(lines, 8.0) == lines
+
+    def test_splits_proportionally_and_keeps_speaker(self) -> None:
+        text = "Short one. " + "This second sentence is much longer than the first!"
+        out = split_long_lines([Line(10.0, 30.0, text, "Alice")], 8.0)
+        assert [ln.text for ln in out] == [
+            "Short one.",
+            "This second sentence is much longer than the first!",
+        ]
+        assert all(ln.speaker == "Alice" for ln in out)
+        assert out[0].start == 10.0
+        assert out[-1].end == 30.0
+        assert out[0].end == out[1].start
+        n0, n1 = len(out[0].text), len(out[1].text)
+        assert out[0].end == pytest.approx(10.0 + 20.0 * n0 / (n0 + n1), abs=1e-3)
+
+    def test_question_and_exclamation_are_boundaries(self) -> None:
+        out = split_long_lines([Line(0.0, 30.0, "Why? Because! Done.", None)], 8.0)
+        assert [ln.text for ln in out] == ["Why?", "Because!", "Done."]
+
+
+def test_action_item_checkpoints_only_for_markdown(tmp_path: Path) -> None:
+    vtt = tmp_path / "t.vtt"
+    vtt.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n")
+    assert action_item_checkpoints(vtt) == []
+    md = tmp_path / "t.md"
+    md.write_text(
+        "**ACTION ITEM: Fix login - ++[WATCH](https://fathom.video/x?timestamp=42.5)++**\n"
+    )
+    [cp] = action_item_checkpoints(md)
+    assert (cp.t, cp.kind, cp.label) == (42.5, "action_item", "Fix login")
+
+
+def test_parse_fathom_action_items_dedupes() -> None:
+    line = "**ACTION ITEM: Fix login - ++[WATCH](https://fathom.video/x?timestamp=42.5)++**\n"
+    assert len(parse_fathom_action_items(line + line)) == 1
