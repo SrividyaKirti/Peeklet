@@ -144,7 +144,7 @@ def test_low_info_rejector_accepts_real_text_frame_at_720p():
     the OCR downscale regression that previously dropped every demo frame
     from a 720p screen-share recording.
     """
-    from peeklet.config import DemoFilterConfig
+    from peeklet.config import PeekletConfig
     from peeklet.screen import _is_low_info_frame
 
     # Dashboard-like content: many words across rows and columns so that
@@ -165,7 +165,7 @@ def test_low_info_rejector_accepts_real_text_frame_at_720p():
         "Low Medium High Critical Severe Blocker",
     ]
     frame = _render_text_frame(dashboard_rows, width=1280, height=720)
-    cfg = DemoFilterConfig()
+    cfg = PeekletConfig()
     assert _is_low_info_frame(frame, cfg) is False
 
 
@@ -316,9 +316,9 @@ class TestEdgePixelRatio:
 @pytest.mark.rejector_live
 class TestIsLowInfoFrame:
     def _cfg(self, **overrides):
-        from peeklet.config import DemoFilterConfig
+        from peeklet.config import PeekletConfig
 
-        return DemoFilterConfig(**overrides)
+        return PeekletConfig(**overrides)
 
     def test_rejects_when_all_three_signals_fail(self, monkeypatch):
         from peeklet import screen

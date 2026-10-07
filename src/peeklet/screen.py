@@ -12,7 +12,7 @@ import numpy as np
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from peeklet.config import DemoFilterConfig
+    from peeklet.config import PeekletConfig
 
 logger = logging.getLogger(__name__)
 
@@ -172,13 +172,13 @@ def _edge_pixel_ratio(frame: np.ndarray) -> float:
     return edge_pixels / total if total else 0.0
 
 
-def _is_low_info_frame(frame: np.ndarray, config: DemoFilterConfig) -> bool:
+def _is_low_info_frame(frame: np.ndarray, config: PeekletConfig) -> bool:
     """Composite low-information rejector (triple-AND).
 
     Rejects a frame only if **all three** independent signals fall under
     their thresholds. A legit minimalist UI will pass on at least one axis.
     """
-    boxes = _ocr_word_boxes(frame, config.gallery_ocr_min_dim)
+    boxes = _ocr_word_boxes(frame, config.ocr_max_dim)
     num_lines = _count_text_lines(boxes)
     num_cells = _count_occupied_grid_cells(boxes, frame.shape)
     edge_ratio = _edge_pixel_ratio(frame)

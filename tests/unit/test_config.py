@@ -1,238 +1,73 @@
-"""Tests for configuration loading and validation."""
+"""Tests for PeekletConfig and load_config."""
 
-import json
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import pytest
-import yaml
 from pydantic import ValidationError
 
-from peeklet.config import (
-    ComparatorConfig,
-    HasherConfig,
-    MaskingConfig,
-    PeekletConfig,
-    VideoConfig,
-    load_config,
-)
+from peeklet.config import PeekletConfig, ScoreWeights, load_config
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-class TestDefaults:
-    def test_default_config_is_valid(self) -> None:
-        config = PeekletConfig()
-        assert config.masking.block_size == 32
-        assert config.masking.window_size == 15
-        assert config.masking.noise_threshold == 0.8
-        assert config.hasher.algorithm == "phash"
-        assert config.comparator.ssim_threshold == 0.85
-
-    def test_default_tile_aspect_ratio(self) -> None:
-        config = PeekletConfig()
-        assert config.hasher.tile_aspect_ratio == 1.5
-
-    def test_default_min_changed_blocks(self) -> None:
-        config = PeekletConfig()
-        assert config.comparator.min_changed_blocks == 3
-
-
-class TestValidation:
-    def test_reject_negative_block_size(self) -> None:
-        with pytest.raises(ValueError):
-            MaskingConfig(block_size=-1)
-
-    def test_reject_threshold_out_of_range(self) -> None:
-        with pytest.raises(ValueError):
-            ComparatorConfig(ssim_threshold=1.5)
-
-    def test_reject_threshold_below_zero(self) -> None:
-        with pytest.raises(ValueError):
-            ComparatorConfig(ssim_threshold=-0.1)
-
-    def test_reject_noise_threshold_out_of_range(self) -> None:
-        with pytest.raises(ValueError):
-            MaskingConfig(noise_threshold=1.5)
-
-    def test_reject_negative_tile_aspect_ratio(self) -> None:
-        with pytest.raises(ValueError):
-            HasherConfig(tile_aspect_ratio=-1.0)
-
-    def test_reject_negative_min_changed_blocks(self) -> None:
-        with pytest.raises(ValueError):
-            ComparatorConfig(min_changed_blocks=-1)
-
-    def test_processing_max_dim_rejects_tiny_values(self) -> None:
-        """processing_max_dim below 64 is silently broken — must error."""
-        with pytest.raises(ValidationError):
-            VideoConfig(processing_max_dim=10)
-
-    def test_processing_max_dim_accepts_64(self) -> None:
-        """64 is the minimum; anything below it errors."""
-        config = VideoConfig(processing_max_dim=64)
-        assert config.processing_max_dim == 64
-
-    def test_processing_max_dim_accepts_none(self) -> None:
-        """None still means 'no downscaling' — must remain valid."""
-        config = VideoConfig(processing_max_dim=None)
-        assert config.processing_max_dim is None
-
-
-class TestLoadConfig:
-    def test_load_from_json_file(self, tmp_path: Path) -> None:
-        config_data = {
-            "comparator": {"ssim_threshold": 0.9},
-            "masking": {"block_size": 64},
-        }
-        config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps(config_data))
-
-        config = load_config(config_file)
-        assert config.comparator.ssim_threshold == 0.9
-        assert config.masking.block_size == 64
-        assert config.masking.window_size == 15
-
-    def test_load_from_yaml_file(self, tmp_path: Path) -> None:
-        config_data = {"comparator": {"ssim_threshold": 0.7}}
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(config_data))
-
-        config = load_config(config_file)
-        assert config.comparator.ssim_threshold == 0.7
-
-    def test_load_nonexistent_file_raises(self) -> None:
-        with pytest.raises(FileNotFoundError):
-            load_config(Path("/nonexistent/config.json"))
-
-    def test_load_none_returns_defaults(self) -> None:
-        config = load_config(None)
-        assert config == PeekletConfig()
-
-
-class TestVideoConfig:
-    def test_defaults(self) -> None:
-        config = PeekletConfig()
-        assert config.video.sample_fps == 1.0
-        assert config.video.formats == ["mp4", "mov", "webm"]
-        assert config.video.audio_detection is True
-        assert config.video.transcript_path is None
-
-    def test_custom_video_config_from_dict(self) -> None:
-        config = PeekletConfig.model_validate(
-            {
-                "video": {
-                    "sample_fps": 2.0,
-                    "formats": ["mp4"],
-                    "audio_detection": False,
-                    "transcript_path": "/path/to/transcript.srt",
-                }
-            }
-        )
-        assert config.video.sample_fps == 2.0
-        assert config.video.formats == ["mp4"]
-        assert config.video.audio_detection is False
-        assert config.video.transcript_path == "/path/to/transcript.srt"
-
-    def test_sample_fps_must_be_positive(self) -> None:
-        with pytest.raises(ValidationError):
-            PeekletConfig.model_validate({"video": {"sample_fps": 0}})
-
-    def test_load_video_config_from_yaml(self, tmp_path: Path) -> None:
-        config_data = {
-            "video": {
-                "sample_fps": 5.0,
-                "formats": ["mp4", "webm"],
-                "audio_detection": False,
-                "transcript_path": "/tmp/captions.srt",
-            }
-        }
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(config_data))
-
-        config = load_config(config_file)
-        assert config.video.sample_fps == 5.0
-        assert config.video.formats == ["mp4", "webm"]
-        assert config.video.audio_detection is False
-        assert config.video.transcript_path == "/tmp/captions.srt"
-
-
-def test_demo_filter_config_defaults():
+def test_defaults_match_spec() -> None:
     cfg = PeekletConfig()
-    assert cfg.demo_filter.enabled is False
-    assert cfg.demo_filter.llm_provider == "anthropic"
-    assert cfg.demo_filter.llm_model == "claude-haiku-4-5"
-    assert cfg.demo_filter.gallery_ocr_min_dim == 1920
-    assert cfg.demo_filter.tail_skip_ratio == 0.02
+    assert cfg.sample_fps == 1.0
+    assert cfg.checkpoint_window_seconds == 5.0
+    assert cfg.min_pause_seconds == 1.5
+    assert cfg.cue_threshold == 1.0
+    assert cfg.anchor_bonus == 1.0
+    assert cfg.max_line_seconds == 8.0
+    assert cfg.lead_seconds == 1.5
+    assert cfg.max_images == 20
+    assert cfg.shortlist_factor == 2.0
+    assert cfg.llm_concurrency == 8
+    assert cfg.llm_max_lines == 8
+    assert cfg.max_image_edge == 1568
+    assert (cfg.min_text_lines, cfg.min_grid_cells, cfg.min_edge_ratio) == (10, 12, 0.02)
+    assert cfg.ocr_max_dim == 1920
+    assert (cfg.phash_threshold, cfg.ocr_field_min_chars) == (6, 2)
+    assert (cfg.llm_provider, cfg.llm_model) == ("anthropic", "claude-haiku-4-5")
+    assert cfg.use_llm is True
 
 
-def test_demo_filter_config_rejects_unknown_provider():
-    import pytest
-    from pydantic import ValidationError
+def test_score_weight_defaults() -> None:
+    w = ScoreWeights()
+    assert (w.references, w.text_overlap, w.onsets) == (0.25, 0.20, 0.20)
+    assert (w.verbal_cues, w.visual_change, w.time_on_screen) == (0.15, 0.10, 0.10)
 
-    from peeklet.config import DemoFilterConfig
 
+def test_unknown_keys_rejected() -> None:
     with pytest.raises(ValidationError):
-        DemoFilterConfig(llm_provider="cohere")  # type: ignore[arg-type]
+        PeekletConfig.model_validate({"not_a_field": 1})
 
 
-class TestDemoFilterLayoutConfig:
-    def test_defaults(self) -> None:
-        from peeklet.config import DemoFilterConfig
-
-        cfg = DemoFilterConfig()
-        assert cfg.min_text_lines == 10
-        assert cfg.min_grid_cells == 12
-        assert cfg.min_edge_ratio == 0.020
-
-    def test_thresholds_validated(self) -> None:
-        from peeklet.config import DemoFilterConfig
-
-        with pytest.raises(ValidationError):
-            DemoFilterConfig(min_text_lines=-1)
-        with pytest.raises(ValidationError):
-            DemoFilterConfig(min_edge_ratio=-0.1)
+def test_negative_max_images_rejected() -> None:
+    with pytest.raises(ValidationError):
+        PeekletConfig(max_images=-1)
 
 
-def test_demo_filter_config_has_phash_threshold_default_6():
-    from peeklet.config import DemoFilterConfig
-
-    cfg = DemoFilterConfig()
-    assert cfg.phash_threshold == 6
+def test_load_none_returns_defaults() -> None:
+    assert load_config(None) == PeekletConfig()
 
 
-def test_demo_filter_config_has_ocr_field_min_chars_default_2():
-    from peeklet.config import DemoFilterConfig
-
-    cfg = DemoFilterConfig()
-    assert cfg.ocr_field_min_chars == 2
-
-
-def test_demo_filter_config_has_quality_fallback_defaults():
-    from peeklet.config import DemoFilterConfig
-
-    cfg = DemoFilterConfig()
-    assert cfg.quality_fallback_max_attempts == 8
-    assert cfg.quality_fallback_half_window_seconds == 4.0
-    assert cfg.quality_fallback_step_seconds == 1.0
+def test_load_yaml(tmp_path: Path) -> None:
+    p = tmp_path / "c.yaml"
+    p.write_text("max_images: 5\nscore_weights:\n  references: 0.5\n")
+    cfg = load_config(p)
+    assert cfg.max_images == 5
+    assert cfg.score_weights.references == 0.5
 
 
-def test_demo_filter_config_rejects_removed_fields():
-    """SSIM dedup, pHash dedup, and the per-moment search window are gone.
+def test_load_json(tmp_path: Path) -> None:
+    p = tmp_path / "c.json"
+    p.write_text('{"llm_model": "claude-sonnet-5-5"}')
+    assert load_config(p).llm_model == "claude-sonnet-5-5"
 
-    A config file that still supplies them must fail validation rather
-    than silently ignore — that gives users a clear signal to update.
-    """
-    import pydantic
 
-    from peeklet.config import DemoFilterConfig
-
-    for field in (
-        "dedup_ssim_threshold",
-        "phash_hamming_threshold",
-        "forward_search_window_max_sec",
-        "forward_search_step_sec",
-        "search_window_lookback_sec",
-        "ssim_stability_threshold",
-        "frame_search_resolution",
-        "gallery_min_words",
-    ):
-        with pytest.raises(pydantic.ValidationError):
-            DemoFilterConfig(**{field: 0.5})
+def test_load_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_config(tmp_path / "nope.yaml")
