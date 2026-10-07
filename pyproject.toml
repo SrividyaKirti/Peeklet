@@ -97,7 +97,7 @@ disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "benchmark: performance benchmark tests",
     "slow: long-running integration tests (use -m slow to run)",
