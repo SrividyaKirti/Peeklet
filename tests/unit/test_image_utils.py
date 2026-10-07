@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-from peeklet.utils.image import (
+from peeklet.image_utils import (
     compute_block_grid,
     crop_region,
     dhash_64,
     ensure_rgb_uint8,
     hamming_distance,
 )
-from peeklet.utils.types import Region
+from peeklet.types import Region
 
 
 class TestEnsureRgbUint8:

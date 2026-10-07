@@ -1,6 +1,6 @@
 """Tests for shared type definitions."""
 
-from peeklet.utils.types import Moment, Region
+from peeklet.types import Moment, Region
 
 
 class TestRegion:
@@ -47,7 +47,7 @@ def test_moment_is_frozen():
 
 
 def test_moment_new_fields():
-    from peeklet.utils.types import Moment
+    from peeklet.types import Moment
 
     m = Moment(
         timestamp=12.5,
@@ -63,7 +63,7 @@ def test_moment_new_fields():
 
 
 def test_moment_anchor_source():
-    from peeklet.utils.types import Moment
+    from peeklet.types import Moment
 
     m = Moment(
         timestamp=232.0,

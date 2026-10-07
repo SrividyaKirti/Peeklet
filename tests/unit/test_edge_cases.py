@@ -3,11 +3,15 @@
 import numpy as np
 import pytest
 
-from peeklet.core.comparator import ComparisonResult, compare_frames
-from peeklet.core.hasher import compute_phash, hashes_match
-from peeklet.core.masking import AdaptiveMask
-from peeklet.utils.image import compute_block_grid, crop_region, ensure_rgb_uint8
-from peeklet.utils.types import Region
+from peeklet.change import (
+    AdaptiveMask,
+    ComparisonResult,
+    compare_frames,
+    compute_phash,
+    hashes_match,
+)
+from peeklet.image_utils import compute_block_grid, crop_region, ensure_rgb_uint8
+from peeklet.types import Region
 
 # ── Image utility edge cases ──────────────────────────────────────────────
 
@@ -118,9 +122,6 @@ class TestComputeBlockGridEdgeCases:
         rows, cols = compute_block_grid(1, 1, block_size=1)
         assert rows == 1
         assert cols == 1
-
-
-# ── Loader edge cases ─────────────────────────────────────────────────────
 
 
 # ── Hasher edge cases ─────────────────────────────────────────────────────
@@ -320,12 +321,6 @@ class TestAdaptiveMaskEdgeCases:
         assert len(regions) == 25  # 5x5 blocks
 
 
-# ── Config edge cases ─────────────────────────────────────────────────────
-
-
-# ── Exporter edge cases ───────────────────────────────────────────────────
-
-
 # ── Types edge cases ──────────────────────────────────────────────────────
 
 
@@ -342,6 +337,3 @@ class TestTypesEdgeCases:
         r = Region(x=0, y=0, w=10, h=10)
         with pytest.raises(AttributeError):
             r.x = 5  # type: ignore[misc]
-
-
-# ── Pipeline integration edge cases ───────────────────────────────────────

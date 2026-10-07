@@ -1,17 +1,11 @@
-"""Tests for the audio module — transcript parsing and speech detection."""
+"""Tests for transcript parsing and Fathom anchors."""
 
 from pathlib import Path
 
 import pytest
 
-from peeklet.core.audio import TranscriptSegment, parse_transcript
-
-try:
-    import pydub  # noqa: F401
-
-    _has_pydub = True
-except ImportError:
-    _has_pydub = False
+from peeklet.transcript import parse_transcript
+from peeklet.types import Line
 
 
 class TestParseSrt:
@@ -29,8 +23,8 @@ class TestParseSrt:
         )
         segments = parse_transcript(srt_file)
         assert len(segments) == 2
-        assert segments[0] == TranscriptSegment(start=1.0, end=3.5, text="Hello world")
-        assert segments[1] == TranscriptSegment(start=5.0, end=8.2, text="Click the button")
+        assert segments[0] == Line(start=1.0, end=3.5, text="Hello world")
+        assert segments[1] == Line(start=5.0, end=8.2, text="Click the button")
 
     def test_parse_multiline_srt(self, tmp_path: Path) -> None:
         srt_file = tmp_path / "test.srt"
@@ -61,8 +55,8 @@ class TestParseVtt:
         )
         segments = parse_transcript(vtt_file)
         assert len(segments) == 2
-        assert segments[0] == TranscriptSegment(start=1.0, end=3.5, text="Hello world")
-        assert segments[1] == TranscriptSegment(start=5.0, end=8.2, text="Click the button")
+        assert segments[0] == Line(start=1.0, end=3.5, text="Hello world")
+        assert segments[1] == Line(start=5.0, end=8.2, text="Click the button")
 
     def test_vtt_with_header_metadata(self, tmp_path: Path) -> None:
         vtt_file = tmp_path / "test.vtt"
@@ -205,7 +199,7 @@ class TestParseFathomMd:
 
 class TestParseFathomAnchors:
     def test_extracts_action_items_with_watch_timestamps(self) -> None:
-        from peeklet.core.audio import parse_fathom_anchors
+        from peeklet.transcript import parse_fathom_anchors
 
         text = (
             "**ACTION ITEM: Fix missing assistant prompt - "
@@ -225,13 +219,13 @@ class TestParseFathomAnchors:
         assert anchors[1].timestamp == pytest.approx(455.9999)
 
     def test_returns_empty_on_no_action_items(self) -> None:
-        from peeklet.core.audio import parse_fathom_anchors
+        from peeklet.transcript import parse_fathom_anchors
 
         text = "Just some regular transcript text with no action items.\n"
         assert parse_fathom_anchors(text) == []
 
     def test_sorted_by_timestamp(self) -> None:
-        from peeklet.core.audio import parse_fathom_anchors
+        from peeklet.transcript import parse_fathom_anchors
 
         text = (
             "**ACTION ITEM: Second - "
@@ -241,37 +235,3 @@ class TestParseFathomAnchors:
         )
         anchors = parse_fathom_anchors(text)
         assert [a.timestamp for a in anchors] == [100.0, 500.0]
-
-
-@pytest.mark.skipif(not _has_pydub, reason="requires peeklet[video]")
-class TestSpeechSilenceDetection:
-    def test_detect_speech_in_audio(self, tmp_path: Path) -> None:
-        from pydub import AudioSegment
-        from pydub.generators import Sine
-
-        # Generate 3 seconds: 1s silence, 1s tone (speech proxy), 1s silence
-        silence = AudioSegment.silent(duration=1000)
-        tone = Sine(440).to_audio_segment(duration=1000).apply_gain(-10)
-        audio = silence + tone + silence
-        audio_path = tmp_path / "test.wav"
-        audio.export(str(audio_path), format="wav")
-
-        from peeklet.core.audio import detect_speech_segments
-
-        speech_segments = detect_speech_segments(audio_path)
-        # Should detect speech roughly in the 1-2 second range
-        assert len(speech_segments) >= 1
-        has_speech_in_middle = any(s.start < 2.0 and s.end > 1.0 for s in speech_segments)
-        assert has_speech_in_middle
-
-    def test_silence_only_audio(self, tmp_path: Path) -> None:
-        from pydub import AudioSegment
-
-        silence = AudioSegment.silent(duration=2000)
-        audio_path = tmp_path / "test.wav"
-        silence.export(str(audio_path), format="wav")
-
-        from peeklet.core.audio import detect_speech_segments
-
-        speech_segments = detect_speech_segments(audio_path)
-        assert speech_segments == []

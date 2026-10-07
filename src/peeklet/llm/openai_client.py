@@ -10,7 +10,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from peeklet.core.llm import (
+from peeklet.llm.base import (
     SYSTEM_PROMPT,
     LLMResponseError,
     _parse_moments_json,
@@ -18,8 +18,7 @@ from peeklet.core.llm import (
 )
 
 if TYPE_CHECKING:
-    from peeklet.core.audio import TranscriptSegment
-    from peeklet.utils.types import Moment
+    from peeklet.types import Line, Moment
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +81,11 @@ class OpenAIClient:
 
     def pick_moments(
         self,
-        transcript: list[TranscriptSegment],
+        transcript: list[Line],
         video_duration: float,
         anchors: list[Moment],
     ) -> list[Moment]:
-        from peeklet.core.llm import format_anchors_for_llm
+        from peeklet.llm.base import format_anchors_for_llm
 
         anchor_list = format_anchors_for_llm(anchors)
         system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)

@@ -11,12 +11,11 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from peeklet.core.llm import SYSTEM_PROMPT, format_transcript_for_llm
-from peeklet.core.llm_openai import _call_openai_chat_with_retry
+from peeklet.llm.base import SYSTEM_PROMPT, format_transcript_for_llm
+from peeklet.llm.openai_client import _call_openai_chat_with_retry
 
 if TYPE_CHECKING:
-    from peeklet.core.audio import TranscriptSegment
-    from peeklet.utils.types import Moment
+    from peeklet.types import Line, Moment
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +50,11 @@ class OpenRouterClient:
 
     def pick_moments(
         self,
-        transcript: list[TranscriptSegment],
+        transcript: list[Line],
         video_duration: float,
         anchors: list[Moment],
     ) -> list[Moment]:
-        from peeklet.core.llm import format_anchors_for_llm
+        from peeklet.llm.base import format_anchors_for_llm
 
         anchor_list = format_anchors_for_llm(anchors)
         system_prompt = SYSTEM_PROMPT.format(anchor_list=anchor_list)

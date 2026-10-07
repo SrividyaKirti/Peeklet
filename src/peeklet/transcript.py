@@ -1,23 +1,14 @@
-"""Audio analysis — transcript parsing and speech/silence detection."""
+"""Transcript parsing (SRT, VTT, Fathom markdown) and Fathom action anchors."""
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
-
-@dataclass(frozen=True, slots=True)
-class TranscriptSegment:
-    """A timestamped segment from an SRT or VTT transcript."""
-
-    start: float  # seconds
-    end: float  # seconds
-    text: str
-    speaker: str | None = None
+from peeklet.types import Line
 
 
-def parse_transcript(path: Path) -> list[TranscriptSegment]:
+def parse_transcript(path: Path) -> list[Line]:
     """Parse a transcript file into timestamped segments.
 
     Auto-detects format by file extension:
@@ -52,9 +43,9 @@ def _parse_timestamp(ts: str) -> float:
 _TIMESTAMP_RE = re.compile(r"(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})")
 
 
-def _parse_srt(text: str) -> list[TranscriptSegment]:
+def _parse_srt(text: str) -> list[Line]:
     """Parse SRT format."""
-    segments: list[TranscriptSegment] = []
+    segments: list[Line] = []
     blocks = re.split(r"\n\n+", text.strip())
     for block in blocks:
         lines = block.strip().splitlines()
@@ -72,7 +63,7 @@ def _parse_srt(text: str) -> list[TranscriptSegment]:
         text_lines = lines[timestamp_line_idx + 1 :]
         content = " ".join(line.strip() for line in text_lines if line.strip())
         if content:
-            segments.append(TranscriptSegment(start=start, end=end, text=content))
+            segments.append(Line(start=start, end=end, text=content))
     return segments
 
 
@@ -103,7 +94,7 @@ def parse_fathom_anchors(text: str) -> list:
 
     Returns Moments sorted by timestamp with ``source="anchor"``.
     """
-    from peeklet.utils.types import Moment
+    from peeklet.types import Moment
 
     seen: set[tuple[float, str]] = set()
     anchors: list[Moment] = []
@@ -129,7 +120,7 @@ def parse_fathom_anchors(text: str) -> list:
     return anchors
 
 
-def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
+def _parse_fathom_md(text: str) -> list[Line]:
     """Parse a Fathom-style markdown transcript.
 
     Each segment looks like::
@@ -170,16 +161,16 @@ def _parse_fathom_md(text: str) -> list[TranscriptSegment]:
     if current_start is not None and current_lines:
         raw_segments.append((current_start, current_speaker, current_lines))
 
-    segments: list[TranscriptSegment] = []
+    segments: list[Line] = []
     for i, (start, speaker, lines) in enumerate(raw_segments):
         end = raw_segments[i + 1][0] if i + 1 < len(raw_segments) else start + 5.0
         content = " ".join(lines).strip()
         if content:
-            segments.append(TranscriptSegment(start=start, end=end, text=content, speaker=speaker))
+            segments.append(Line(start=start, end=end, text=content, speaker=speaker))
     return segments
 
 
-def _parse_vtt(text: str) -> list[TranscriptSegment]:
+def _parse_vtt(text: str) -> list[Line]:
     """Parse WebVTT format."""
     lines = text.splitlines()
     body_start = 0
@@ -193,70 +184,3 @@ def _parse_vtt(text: str) -> list[TranscriptSegment]:
 
     body = "\n".join(lines[body_start:])
     return _parse_srt(body)
-
-
-def _check_audio_deps() -> None:
-    """Raise a clear error if audio dependencies are not installed."""
-    try:
-        import os
-
-        import imageio_ffmpeg
-
-        os.environ.setdefault("FFMPEG_BINARY", imageio_ffmpeg.get_ffmpeg_exe())
-        from pydub import AudioSegment
-
-        AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        pass
-
-    try:
-        import pydub  # noqa: F401
-    except ImportError:
-        raise ImportError(
-            "Audio detection requires additional dependencies. "
-            "Install with: pip install peeklet[video]"
-        ) from None
-
-
-def detect_speech_segments(
-    audio_path: Path,
-    chunk_ms: int = 500,
-    silence_threshold_dbfs: float = -40.0,
-) -> list[TranscriptSegment]:
-    """Detect speech segments using RMS energy thresholds.
-
-    Divides audio into chunks and classifies each as speech or silence
-    based on dBFS level. Merges consecutive speech chunks into segments.
-
-    Returns list of TranscriptSegment with text="[speech]" for detected speech.
-    """
-    _check_audio_deps()
-    from pydub import AudioSegment
-
-    audio = AudioSegment.from_file(str(audio_path))
-    duration_s = len(audio) / 1000.0
-
-    speech_ranges: list[tuple[float, float]] = []
-    current_start: float | None = None
-
-    for chunk_start_ms in range(0, len(audio), chunk_ms):
-        chunk_end_ms = min(chunk_start_ms + chunk_ms, len(audio))
-        chunk = audio[chunk_start_ms:chunk_end_ms]
-
-        is_speech = chunk.dBFS > silence_threshold_dbfs
-
-        start_s = chunk_start_ms / 1000.0
-
-        if is_speech:
-            if current_start is None:
-                current_start = start_s
-        else:
-            if current_start is not None:
-                speech_ranges.append((current_start, start_s))
-                current_start = None
-
-    # Close any trailing speech segment
-    if current_start is not None:
-        speech_ranges.append((current_start, duration_s))
-
-    return [TranscriptSegment(start=s, end=e, text="[speech]") for s, e in speech_ranges]

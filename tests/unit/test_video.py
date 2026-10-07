@@ -10,7 +10,7 @@ import pytest
 iio = pytest.importorskip("imageio.v3", reason="requires peeklet[video]")
 pytest.importorskip("av", reason="requires peeklet[video]")
 
-from peeklet.core.video import VideoDecoder, VideoMeta  # noqa: E402
+from peeklet.video import VideoDecoder, VideoMeta  # noqa: E402
 
 
 def _make_test_video(path: Path, frames: list[np.ndarray], fps: int = 30) -> Path:

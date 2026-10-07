@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from peeklet.utils.image import ensure_rgb_uint8
+from peeklet.image_utils import ensure_rgb_uint8
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class VideoDecoder:
         """Extract frames at a coarse sample rate using a single sequential
         pyav decode, yielding only the frames that fall on the sample grid.
 
-        This is much faster than :meth:`extract_coarse_frames` because:
+        This is much faster than decoding and converting every frame because:
         - The codec still walks packets, but we never copy skipped frames into
           Python (no numpy materialization).
         - When ``max_dim`` is provided, downscaling is performed inside pyav's

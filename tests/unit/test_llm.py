@@ -8,19 +8,17 @@ import pytest
 
 
 def _make_segments():
-    from peeklet.core.audio import TranscriptSegment
+    from peeklet.types import Line
 
     return [
-        TranscriptSegment(
+        Line(
             start=0.0,
             end=3.5,
             text="Hey everyone, today I'll show you the dashboard.",
             speaker="Alice",
         ),
-        TranscriptSegment(
-            start=3.5, end=8.2, text="Let me start by signing in here.", speaker="Bob"
-        ),
-        TranscriptSegment(
+        Line(start=3.5, end=8.2, text="Let me start by signing in here.", speaker="Bob"),
+        Line(
             start=8.2,
             end=12.1,
             text="Okay, this is the main view after login.",
@@ -30,7 +28,7 @@ def _make_segments():
 
 
 def test_format_transcript_includes_timestamps_and_text():
-    from peeklet.core.llm import format_transcript_for_llm
+    from peeklet.llm.base import format_transcript_for_llm
 
     segments = _make_segments()
     formatted = format_transcript_for_llm(segments)
@@ -44,17 +42,17 @@ def test_format_transcript_includes_timestamps_and_text():
 
 
 def test_format_transcript_omits_speaker_when_none():
-    from peeklet.core.audio import TranscriptSegment
-    from peeklet.core.llm import format_transcript_for_llm
+    from peeklet.llm.base import format_transcript_for_llm
+    from peeklet.types import Line
 
-    segments = [TranscriptSegment(start=0.0, end=3.0, text="Hello")]
+    segments = [Line(start=0.0, end=3.0, text="Hello")]
     formatted = format_transcript_for_llm(segments)
     assert "[0.0 - 3.0] Hello" in formatted
     assert "**" not in formatted
 
 
 def test_parse_moments_strips_markdown_fences():
-    from peeklet.core.llm import _parse_moments_json
+    from peeklet.llm.base import _parse_moments_json
 
     raw = (
         "```json\n"
@@ -72,7 +70,7 @@ def test_parse_moments_strips_markdown_fences():
 
 
 def test_parse_moments_drops_out_of_range_timestamps():
-    from peeklet.core.llm import _parse_moments_json
+    from peeklet.llm.base import _parse_moments_json
 
     raw = (
         "["
@@ -91,7 +89,7 @@ def test_parse_moments_drops_out_of_range_timestamps():
 
 
 def test_parse_moments_sorted_by_timestamp():
-    from peeklet.core.llm import _parse_moments_json
+    from peeklet.llm.base import _parse_moments_json
 
     raw = (
         "["
@@ -109,14 +107,14 @@ def test_parse_moments_sorted_by_timestamp():
 
 
 def test_parse_moments_raises_on_unparseable_after_strip():
-    from peeklet.core.llm import LLMResponseError, _parse_moments_json
+    from peeklet.llm.base import LLMResponseError, _parse_moments_json
 
     with pytest.raises(LLMResponseError):
         _parse_moments_json("this is not json at all", video_duration=60.0)
 
 
 def test_parse_moments_raises_on_missing_required_keys():
-    from peeklet.core.llm import LLMResponseError, _parse_moments_json
+    from peeklet.llm.base import LLMResponseError, _parse_moments_json
 
     raw = '[{"timestamp": 5.0, "visual_context_goal": "no anchor or utility"}]'
     with pytest.raises(LLMResponseError):
@@ -124,14 +122,14 @@ def test_parse_moments_raises_on_missing_required_keys():
 
 
 def test_build_llm_client_unknown_provider_raises():
-    from peeklet.core.llm import build_llm_client
+    from peeklet.llm.base import build_llm_client
 
     with pytest.raises(ValueError, match="Unknown LLM provider"):
         build_llm_client(provider="cohere", model="some-model")
 
 
 def test_build_llm_client_anthropic_missing_key_raises(monkeypatch):
-    from peeklet.core.llm import build_llm_client
+    from peeklet.llm.base import build_llm_client
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
@@ -139,7 +137,7 @@ def test_build_llm_client_anthropic_missing_key_raises(monkeypatch):
 
 
 def test_build_llm_client_openai_missing_key_raises(monkeypatch):
-    from peeklet.core.llm import build_llm_client
+    from peeklet.llm.base import build_llm_client
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
@@ -147,7 +145,7 @@ def test_build_llm_client_openai_missing_key_raises(monkeypatch):
 
 
 def test_parse_moments_strips_preamble_before_json():
-    from peeklet.core.llm import _parse_moments_json
+    from peeklet.llm.base import _parse_moments_json
 
     raw = (
         "Here is the JSON you asked for:\n"
@@ -163,7 +161,7 @@ def test_parse_moments_strips_preamble_before_json():
 
 
 def test_parse_moments_handles_nested_brackets_in_strings():
-    from peeklet.core.llm import _parse_moments_json
+    from peeklet.llm.base import _parse_moments_json
 
     raw = (
         '[{"timestamp": 1.0, "visual_context_goal": "uses [brackets] in goal",'
@@ -178,15 +176,15 @@ def test_parse_moments_handles_nested_brackets_in_strings():
 def test_parse_moments_raises_when_no_array():
     import pytest
 
-    from peeklet.core.llm import LLMResponseError, _parse_moments_json
+    from peeklet.llm.base import LLMResponseError, _parse_moments_json
 
     with pytest.raises(LLMResponseError, match="no JSON array"):
         _parse_moments_json("just some prose, no array", video_duration=60.0)
 
 
 def test_anthropic_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
-    from peeklet.core import llm_anthropic
-    from peeklet.utils.types import Moment
+    from peeklet.llm import anthropic_client as llm_anthropic
+    from peeklet.types import Moment
 
     fake_response = MagicMock()
     _json = (
@@ -225,7 +223,7 @@ def test_anthropic_client_pick_moments_calls_sdk_and_parses_response(monkeypatch
 
 
 def test_anthropic_client_retries_once_on_unparseable(monkeypatch):
-    from peeklet.core import llm_anthropic
+    from peeklet.llm import anthropic_client as llm_anthropic
 
     bad_response = MagicMock()
     bad_response.content = [MagicMock(text="not json")]
@@ -252,8 +250,8 @@ def test_anthropic_client_retries_once_on_unparseable(monkeypatch):
 
 
 def test_anthropic_client_raises_after_two_unparseable(monkeypatch):
-    from peeklet.core import llm_anthropic
-    from peeklet.core.llm import LLMResponseError
+    from peeklet.llm import anthropic_client as llm_anthropic
+    from peeklet.llm.base import LLMResponseError
 
     bad_response = MagicMock()
     bad_response.content = [MagicMock(text="garbage")]
@@ -274,8 +272,8 @@ def test_anthropic_client_raises_after_two_unparseable(monkeypatch):
 
 
 def test_openai_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
-    from peeklet.core import llm_openai
-    from peeklet.utils.types import Moment
+    from peeklet.llm import openai_client as llm_openai
+    from peeklet.types import Moment
 
     fake_message = MagicMock()
     fake_message.content = (
@@ -312,7 +310,7 @@ def test_openai_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
 
 
 def test_openai_client_passes_base_url_when_set(monkeypatch):
-    from peeklet.core import llm_openai
+    from peeklet.llm import openai_client as llm_openai
 
     fake_openai = MagicMock()
     monkeypatch.setattr(llm_openai, "openai", fake_openai)
@@ -327,7 +325,7 @@ def test_openai_client_passes_base_url_when_set(monkeypatch):
 
 
 def test_openai_client_retries_once_on_unparseable(monkeypatch):
-    from peeklet.core import llm_openai
+    from peeklet.llm import openai_client as llm_openai
 
     bad_message = MagicMock(content="not json")
     _json = (
@@ -354,7 +352,7 @@ def test_openai_client_retries_once_on_unparseable(monkeypatch):
 
 
 def test_openrouter_client_constructs_with_hardcoded_base_url_and_headers(monkeypatch):
-    from peeklet.core import llm_openrouter
+    from peeklet.llm import openrouter_client as llm_openrouter
 
     fake_openai = MagicMock()
     monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
@@ -373,7 +371,7 @@ def test_openrouter_client_constructs_with_hardcoded_base_url_and_headers(monkey
 
 
 def test_openrouter_client_raises_when_sdk_missing(monkeypatch):
-    from peeklet.core import llm_openrouter
+    from peeklet.llm import openrouter_client as llm_openrouter
 
     monkeypatch.setattr(llm_openrouter, "openai", None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
@@ -383,8 +381,8 @@ def test_openrouter_client_raises_when_sdk_missing(monkeypatch):
 
 
 def test_openrouter_client_pick_moments_calls_sdk_and_parses_response(monkeypatch):
-    from peeklet.core import llm_openrouter
-    from peeklet.utils.types import Moment
+    from peeklet.llm import openrouter_client as llm_openrouter
+    from peeklet.types import Moment
 
     fake_message = MagicMock()
     fake_message.content = (
@@ -421,7 +419,7 @@ def test_openrouter_client_pick_moments_calls_sdk_and_parses_response(monkeypatc
 
 
 def test_openrouter_client_retries_once_on_unparseable(monkeypatch):
-    from peeklet.core import llm_openrouter
+    from peeklet.llm import openrouter_client as llm_openrouter
 
     bad_message = MagicMock(content="not json")
     _json = (
@@ -448,8 +446,8 @@ def test_openrouter_client_retries_once_on_unparseable(monkeypatch):
 
 
 def test_openrouter_client_raises_after_two_unparseable(monkeypatch):
-    from peeklet.core import llm_openrouter
-    from peeklet.core.llm import LLMResponseError
+    from peeklet.llm import openrouter_client as llm_openrouter
+    from peeklet.llm.base import LLMResponseError
 
     bad_message = MagicMock(content="garbage")
     bad_response = MagicMock(choices=[MagicMock(message=bad_message)])
@@ -470,7 +468,7 @@ def test_openrouter_client_raises_after_two_unparseable(monkeypatch):
 
 
 def test_build_llm_client_openrouter_missing_key_raises(monkeypatch):
-    from peeklet.core.llm import build_llm_client
+    from peeklet.llm.base import build_llm_client
 
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
@@ -478,8 +476,8 @@ def test_build_llm_client_openrouter_missing_key_raises(monkeypatch):
 
 
 def test_build_llm_client_openrouter_returns_openrouter_client(monkeypatch):
-    from peeklet.core import llm_openrouter
-    from peeklet.core.llm import build_llm_client
+    from peeklet.llm import openrouter_client as llm_openrouter
+    from peeklet.llm.base import build_llm_client
 
     fake_openai = MagicMock()
     monkeypatch.setattr(llm_openrouter, "openai", fake_openai)
@@ -491,14 +489,14 @@ def test_build_llm_client_openrouter_returns_openrouter_client(monkeypatch):
 
 
 def test_format_anchors_empty_list_returns_sentinel():
-    from peeklet.core.llm import format_anchors_for_llm
+    from peeklet.llm.base import format_anchors_for_llm
 
     assert format_anchors_for_llm([]) == "None — no guaranteed anchors in this video."
 
 
 def test_format_anchors_renders_labels_with_decimal_seconds():
-    from peeklet.core.llm import format_anchors_for_llm
-    from peeklet.utils.types import Moment
+    from peeklet.llm.base import format_anchors_for_llm
+    from peeklet.types import Moment
 
     anchors = [
         Moment(
@@ -522,8 +520,8 @@ def test_format_anchors_renders_labels_with_decimal_seconds():
 
 
 def test_format_anchors_unlabeled_anchor_degrades():
-    from peeklet.core.llm import format_anchors_for_llm
-    from peeklet.utils.types import Moment
+    from peeklet.llm.base import format_anchors_for_llm
+    from peeklet.types import Moment
 
     anchors = [
         Moment(
@@ -539,7 +537,7 @@ def test_format_anchors_unlabeled_anchor_degrades():
 
 
 def test_system_prompt_has_anchor_avoidance_and_placeholder():
-    from peeklet.core.llm import SYSTEM_PROMPT
+    from peeklet.llm.base import SYSTEM_PROMPT
 
     # Old behavior must be gone — this was the root cause.
     assert "MUST include a moment at or near each such timestamp" not in SYSTEM_PROMPT
@@ -554,7 +552,7 @@ def test_system_prompt_has_anchor_avoidance_and_placeholder():
 
 def test_anthropic_client_injects_anchor_list_into_prompt(monkeypatch):
     """Anchors are rendered into both the system prompt and the user message."""
-    import peeklet.core.llm_anthropic as la
+    import peeklet.llm.anthropic_client as la
 
     captured: dict = {}
 
@@ -577,7 +575,7 @@ def test_anthropic_client_injects_anchor_list_into_prompt(monkeypatch):
     fake_module = type("M", (), {"Anthropic": _FakeAnthropic})()
     monkeypatch.setattr(la, "anthropic", fake_module)
 
-    from peeklet.utils.types import Moment
+    from peeklet.types import Moment
 
     client = la.AnthropicClient(model="claude-haiku-4-5")
     anchors = [

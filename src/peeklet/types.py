@@ -31,3 +31,13 @@ class Moment:
     textual_anchor: str  # the transcript line that triggers this need
     downstream_utility: str  # why the MLLM needs this image
     source: str = "llm"  # "llm" | "anchor"
+
+
+@dataclass(frozen=True, slots=True)
+class Line:
+    """One timestamped transcript line."""
+
+    start: float  # seconds
+    end: float  # seconds
+    text: str
+    speaker: str | None = None

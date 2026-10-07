@@ -14,10 +14,10 @@ import os
 import re
 from typing import TYPE_CHECKING, Protocol
 
-from peeklet.utils.types import Moment
+from peeklet.types import Moment
 
 if TYPE_CHECKING:
-    from peeklet.core.audio import TranscriptSegment
+    from peeklet.types import Line
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class LLMClient(Protocol):
 
     def pick_moments(
         self,
-        transcript: list[TranscriptSegment],
+        transcript: list[Line],
         video_duration: float,
         anchors: list[Moment],
     ) -> list[Moment]:
@@ -108,7 +108,7 @@ class LLMClient(Protocol):
         ...
 
 
-def format_transcript_for_llm(segments: list[TranscriptSegment]) -> str:
+def format_transcript_for_llm(segments: list[Line]) -> str:
     """Render the transcript as one line per segment with timestamps.
 
     Format: ``[start - end] **Speaker**: text`` (speaker omitted when None).
@@ -258,15 +258,15 @@ def build_llm_client(provider: str, model: str) -> LLMClient:
         )
 
     if provider == "anthropic":
-        from peeklet.core.llm_anthropic import AnthropicClient
+        from peeklet.llm.anthropic_client import AnthropicClient
 
         return AnthropicClient(model=model)
     if provider == "openai":
-        from peeklet.core.llm_openai import OpenAIClient
+        from peeklet.llm.openai_client import OpenAIClient
 
         return OpenAIClient(model=model)
     if provider == "openrouter":
-        from peeklet.core.llm_openrouter import OpenRouterClient
+        from peeklet.llm.openrouter_client import OpenRouterClient
 
         return OpenRouterClient(model=model)
 
