@@ -30,7 +30,7 @@ class TestSpeechSilenceDetection:
         speech_segments = detect_speech_segments(audio_path)
         # Should detect speech roughly in the 1-2 second range
         assert len(speech_segments) >= 1
-        has_speech_in_middle = any(s.start < 2.0 and s.end > 1.0 for s in speech_segments)
+        has_speech_in_middle = any(s < 2.0 and e > 1.0 for s, e in speech_segments)
         assert has_speech_in_middle
 
     def test_silence_only_audio(self, tmp_path: Path) -> None:
@@ -44,3 +44,31 @@ class TestSpeechSilenceDetection:
 
         speech_segments = detect_speech_segments(audio_path)
         assert speech_segments == []
+
+
+def test_first_range_is_an_onset() -> None:
+    from peeklet.speech import speech_onset_checkpoints
+
+    [cp] = speech_onset_checkpoints([(0.5, 3.0)], min_pause_seconds=1.5)
+    assert (cp.t, cp.kind) == (0.5, "speech_onset")
+
+
+def test_onset_requires_minimum_pause() -> None:
+    from peeklet.speech import speech_onset_checkpoints
+
+    ranges = [(0.0, 2.0), (2.5, 4.0), (6.0, 8.0)]
+    cps = speech_onset_checkpoints(ranges, min_pause_seconds=1.5)
+    assert [c.t for c in cps] == [0.0, 6.0]
+
+
+def test_pause_exactly_at_threshold_counts() -> None:
+    from peeklet.speech import speech_onset_checkpoints
+
+    cps = speech_onset_checkpoints([(0.0, 1.0), (2.5, 3.0)], min_pause_seconds=1.5)
+    assert [c.t for c in cps] == [0.0, 2.5]
+
+
+def test_no_ranges() -> None:
+    from peeklet.speech import speech_onset_checkpoints
+
+    assert speech_onset_checkpoints([], min_pause_seconds=1.5) == []
