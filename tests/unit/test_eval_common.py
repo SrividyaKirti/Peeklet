@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from eval.common import (
     change_times_from_debug,
     clean_youtube_vtt,
+    help_switch_recall,
     match_events,
+    near_duplicate_count,
     prf,
     segment_index,
     whisperx_to_vtt,
 )
+from peeklet.image_utils import encode_jpeg
 from peeklet.transcript import _parse_vtt
 
 YT = """WEBVTT
@@ -64,3 +68,13 @@ def test_whisperx_to_vtt() -> None:
     vtt = whisperx_to_vtt([{"start": 1.617, "end": 30.305, "sentence": "Alright. We start."}])
     [ln] = _parse_vtt(vtt)
     assert (ln.start, ln.end, ln.text) == (1.617, 30.305, "Alright. We start.")
+
+
+def test_help_switch_recall_with_slack() -> None:
+    assert help_switch_recall([10.0, 50.0], [(11.0, 20.0), (30.0, 40.0), (51.0, 60.0)]) == (2, 3)
+
+
+def test_near_duplicate_count() -> None:
+    a = encode_jpeg(np.tile(np.arange(64, dtype=np.uint8), (64, 1))[..., None].repeat(3, 2))
+    b = encode_jpeg(np.full((64, 64, 3), 128, dtype=np.uint8))
+    assert near_duplicate_count([a, a, b]) == 1

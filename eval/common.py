@@ -124,3 +124,25 @@ def download(url: str, dest: Path, headers: dict[str, str] | None = None) -> Pat
             fh.write(chunk)
     tmp.rename(dest)
     return dest
+
+
+def help_switch_recall(
+    change_times: list[float], segments: list[tuple[float, float]], slack: float = 2.0
+) -> tuple[int, int]:
+    """How many app-switch segments contain a predicted screen change (± slack)."""
+    hits = sum(any(s - slack <= t <= e + slack for t in change_times) for s, e in segments)
+    return hits, len(segments)
+
+
+def near_duplicate_count(images: list[bytes], max_distance: int = 4) -> int:
+    """Images whose dHash is within max_distance of an earlier image."""
+    from peeklet.image_utils import decode_jpeg, dhash_64, hamming_distance
+
+    hashes: list[int] = []
+    dupes = 0
+    for data in images:
+        h = dhash_64(decode_jpeg(data))
+        if any(hamming_distance(h, prev) <= max_distance for prev in hashes):
+            dupes += 1
+        hashes.append(h)
+    return dupes
